@@ -1,0 +1,13 @@
+[package]
+name = "gamez"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+egui = "0.29.1"
+egui-wgpu = { version = "0.29.1", features = ["winit"] }
+egui-winit = "0.29.1"
+pollster = "0.4.0"
+raw-window-handle = "0.6.2"
+wgpu = "23.0.1"
+winit = "0.30.5"
