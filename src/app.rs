@@ -5,11 +5,21 @@ use winit::{
     window::Window,
 };
 
+use crate::{
+    camera_uniform::CameraState, mouse_uniform::MouseState, square_mesh::SquareMesh, timer::Timer,
+};
+
 pub struct AppState {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub surface_config: wgpu::SurfaceConfiguration,
     pub surface: wgpu::Surface<'static>,
+    pub mouse_state: MouseState,
+    pub camera_state: CameraState,
+    pub square_mesh: SquareMesh,
+    pub timer: Timer,
+    pub bind_group: wgpu::BindGroup,
+    mouse_pipeline: wgpu::RenderPipeline,
 }
 
 impl AppState {
@@ -64,21 +74,115 @@ impl AppState {
 
         surface.configure(&device, &surface_config);
 
-        // let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
-        //
-        // let scale_factor = 1.0;
+        let square_mesh = SquareMesh::new(&device);
+        let timer = Timer::new();
+        let mouse_state = MouseState::new(&device);
+        let camera_state = CameraState::new(&device, size.width as f32, size.height as f32);
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("BindGroupLayout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, // camera
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, // mouse
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("BindGroup"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_state.get_binding_resource(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: mouse_state.get_bind_group_resource(),
+                },
+            ],
+        });
+
+        let mouse_shader =
+            device.create_shader_module(wgpu::include_wgsl!("../shaders/mouse.wgsl"));
+        let mouse_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("MousePipelineLayout"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let mouse_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("MousePipeline"),
+            layout: Some(&mouse_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &mouse_shader,
+                buffers: &[SquareMesh::desc()],
+                entry_point: None,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mouse_shader,
+                entry_point: None,
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
 
         Self {
             device,
             queue,
             surface,
             surface_config,
-            // egui_renderer,
-            // scale_factor,
+            mouse_state,
+            camera_state,
+            square_mesh,
+            timer,
+            bind_group,
+            mouse_pipeline,
         }
     }
 
     fn resize_surface(&mut self, width: u32, height: u32) {
+        self.camera_state.set_size(width as f32, height as f32);
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
@@ -90,7 +194,6 @@ pub struct App {
     state: Option<AppState>,
     window: Option<Arc<Window>>,
 }
-
 impl App {
     pub fn new() -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
@@ -119,6 +222,10 @@ impl App {
         self.state.get_or_insert(state);
     }
 
+    pub fn get_app_state(&mut self) -> &mut AppState {
+        self.state.as_mut().unwrap()
+    }
+
     fn handle_resized(&mut self, width: u32, height: u32) {
         self.state.as_mut().unwrap().resize_surface(width, height);
     }
@@ -126,11 +233,10 @@ impl App {
     fn handle_redraw(&mut self) {
         let state = self.state.as_mut().unwrap();
 
-        // let screen_descriptor = ScreenDescriptor {
-        //     size_in_pixels: [state.surface_config.width, state.surface_config.height],
-        //     pixels_per_point: self.window.as_ref().unwrap().scale_factor() as f32
-        //         * state.scale_factor,
-        // };
+        state.timer.update();
+        state.mouse_state.update(&state.timer);
+        state.mouse_state.write_buffer(&state.queue);
+        state.camera_state.write_buffer(&state.queue);
 
         let surface_texture = state
             .surface
@@ -146,7 +252,7 @@ impl App {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
@@ -165,6 +271,10 @@ impl App {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+            render_pass.set_pipeline(&state.mouse_pipeline);
+            render_pass.set_bind_group(0, &state.bind_group, &[]);
+            render_pass.set_vertex_buffer(0, state.square_mesh.vertex_buffer.slice(..));
+            render_pass.draw(0..4, 0..1);
         }
 
         state.queue.submit(std::iter::once(encoder.finish()));
@@ -186,14 +296,24 @@ impl ApplicationHandler for App {
         _: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        // // let egui render to process the event first
-        // self.state
-        //     .as_mut()
-        //     .unwrap()
-        //     .egui_renderer
-        //     .handle_input(self.window.as_ref().unwrap(), &event);
-
         match event {
+            WindowEvent::CursorMoved {
+                device_id: _,
+                position,
+            } => self
+                .get_app_state()
+                .mouse_state
+                .set_position(position.into()),
+
+            WindowEvent::MouseInput {
+                device_id: _,
+                state,
+                button: _,
+            } => self
+                .get_app_state()
+                .mouse_state
+                .set_is_clicked(state == winit::event::ElementState::Pressed),
+
             WindowEvent::KeyboardInput {
                 device_id: _,
                 event,
@@ -205,18 +325,22 @@ impl ApplicationHandler for App {
                 }
                 _ => (),
             },
+
             WindowEvent::CloseRequested => {
                 println!("The close button was pressed; stopping");
                 event_loop.exit();
             }
+
             WindowEvent::RedrawRequested => {
                 self.handle_redraw();
 
                 self.window.as_ref().unwrap().request_redraw();
             }
+
             WindowEvent::Resized(new_size) => {
                 self.handle_resized(new_size.width, new_size.height);
             }
+
             _ => (),
         }
     }

@@ -1,4 +1,8 @@
 mod app;
+mod camera_uniform;
+mod mouse_uniform;
+mod square_mesh;
+mod timer;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 

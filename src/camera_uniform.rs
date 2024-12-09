@@ -1,0 +1,50 @@
+use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Zeroable, Pod)]
+struct CameraUniform {
+    width: f32,
+    height: f32,
+}
+
+pub struct CameraState {
+    uniform: CameraUniform,
+    buffer: wgpu::Buffer,
+    size_changed: bool,
+}
+
+impl CameraState {
+    pub fn new(device: &wgpu::Device, width: f32, height: f32) -> Self {
+        let uniform = CameraUniform { width, height };
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("CameraUniform"),
+            contents: bytemuck::cast_slice(&[uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        Self {
+            uniform,
+            buffer,
+            size_changed: false,
+        }
+    }
+
+    pub fn set_size(&mut self, width: f32, height: f32) {
+        if self.uniform.width != width || self.uniform.height != height {
+            self.size_changed = true;
+            self.uniform.width = width;
+            self.uniform.height = height;
+        }
+    }
+
+    pub fn write_buffer(&mut self, queue: &wgpu::Queue) {
+        if self.size_changed {
+            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&[self.uniform]));
+            self.size_changed = false;
+        }
+    }
+
+    pub fn get_binding_resource(&self) -> wgpu::BindingResource<'_> {
+        self.buffer.as_entire_binding()
+    }
+}
