@@ -6,7 +6,9 @@ use winit::{
 };
 
 use crate::{
-    camera_uniform::CameraState, mouse_uniform::MouseState, square_mesh::SquareMesh, timer::Timer,
+    camera_uniform::CameraState, mouse_renderer::MouseRenderer, mouse_uniform::MouseState,
+    simulation::Simulation, simulation_renderer::SimulationRenderer, square_mesh::SquareMesh,
+    timer::Timer,
 };
 
 pub struct AppState {
@@ -19,7 +21,9 @@ pub struct AppState {
     pub square_mesh: SquareMesh,
     pub timer: Timer,
     pub bind_group: wgpu::BindGroup,
-    mouse_pipeline: wgpu::RenderPipeline,
+    // pub mouse_renderer: MouseRenderer,
+    pub simulation: Simulation,
+    pub simulation_renderer: SimulationRenderer,
 }
 
 impl AppState {
@@ -120,52 +124,10 @@ impl AppState {
             ],
         });
 
-        let mouse_shader =
-            device.create_shader_module(wgpu::include_wgsl!("../shaders/mouse.wgsl"));
-        let mouse_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("MousePipelineLayout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-        let mouse_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("MousePipeline"),
-            layout: Some(&mouse_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &mouse_shader,
-                buffers: &[SquareMesh::desc()],
-                entry_point: None,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mouse_shader,
-                entry_point: None,
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
+        // let mouse_renderer = MouseRenderer::new(&device, &surface_config, &bind_group_layout);
+        let simulation = Simulation::new();
+        let simulation_renderer =
+            SimulationRenderer::new(&device, &surface_config, &bind_group_layout);
 
         Self {
             device,
@@ -177,7 +139,9 @@ impl AppState {
             square_mesh,
             timer,
             bind_group,
-            mouse_pipeline,
+            // mouse_renderer,
+            simulation,
+            simulation_renderer,
         }
     }
 
@@ -186,6 +150,19 @@ impl AppState {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
+    }
+
+    fn on_click(&mut self, pressed: bool) {
+        self.mouse_state.set_is_clicked(pressed);
+        if pressed {
+            self.simulation.spawn(self.get_mouse_position_in_world());
+        }
+    }
+
+    fn get_mouse_position_in_world(&self) -> glam::Vec2 {
+        let mouse_position: glam::Vec2 = self.mouse_state.get_position().into();
+
+        mouse_position
     }
 }
 
@@ -233,10 +210,13 @@ impl App {
     fn handle_redraw(&mut self) {
         let state = self.state.as_mut().unwrap();
 
+        dbg!(state.get_mouse_position_in_world());
+
         state.timer.update();
         state.mouse_state.update(&state.timer);
         state.mouse_state.write_buffer(&state.queue);
         state.camera_state.write_buffer(&state.queue);
+        state.simulation.update(&state.timer);
 
         let surface_texture = state
             .surface
@@ -271,10 +251,12 @@ impl App {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-            render_pass.set_pipeline(&state.mouse_pipeline);
             render_pass.set_bind_group(0, &state.bind_group, &[]);
-            render_pass.set_vertex_buffer(0, state.square_mesh.vertex_buffer.slice(..));
-            render_pass.draw(0..4, 0..1);
+            state.simulation_renderer.render(
+                &mut render_pass,
+                &state.square_mesh,
+                &state.simulation,
+            );
         }
 
         state.queue.submit(std::iter::once(encoder.finish()));
@@ -311,8 +293,7 @@ impl ApplicationHandler for App {
                 button: _,
             } => self
                 .get_app_state()
-                .mouse_state
-                .set_is_clicked(state == winit::event::ElementState::Pressed),
+                .on_click(state == winit::event::ElementState::Pressed),
 
             WindowEvent::KeyboardInput {
                 device_id: _,

@@ -72,4 +72,8 @@ impl MouseState {
     pub fn set_is_clicked(&mut self, is_clicked: bool) {
         self.uniform.set_is_clicked(is_clicked);
     }
+
+    pub fn get_position(&self) -> (f32, f32) {
+        (self.uniform.position.x, self.uniform.position.y)
+    }
 }

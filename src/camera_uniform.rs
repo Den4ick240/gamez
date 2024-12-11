@@ -6,6 +6,9 @@ use wgpu::util::DeviceExt;
 struct CameraUniform {
     width: f32,
     height: f32,
+    position: glam::Vec2,
+    fov: f32,
+    _padding: [f32; 3],
 }
 
 pub struct CameraState {
@@ -16,7 +19,13 @@ pub struct CameraState {
 
 impl CameraState {
     pub fn new(device: &wgpu::Device, width: f32, height: f32) -> Self {
-        let uniform = CameraUniform { width, height };
+        let uniform = CameraUniform {
+            width,
+            height,
+            position: glam::vec2(0.0, 0.0),
+            fov: 100.0,
+            _padding: [0.0; 3],
+        };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("CameraUniform"),
             contents: bytemuck::cast_slice(&[uniform]),
