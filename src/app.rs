@@ -155,14 +155,18 @@ impl AppState {
     fn on_click(&mut self, pressed: bool) {
         self.mouse_state.set_is_clicked(pressed);
         if pressed {
-            self.simulation.spawn(self.get_mouse_position_in_world());
+            // self.simulation.spawn(self.get_mouse_position_in_world());
         }
     }
 
     fn get_mouse_position_in_world(&self) -> glam::Vec2 {
+        let camera_state = &self.camera_state;
         let mouse_position: glam::Vec2 = self.mouse_state.get_position().into();
+        let camera_size: glam::Vec2 = self.camera_state.get_size().into();
+        let fov_scale = camera_state.get_fov() / camera_size.x;
 
-        mouse_position
+        (mouse_position - camera_size / 2.0) * glam::vec2(1.0, -1.0) * fov_scale
+            + camera_state.get_world_position()
     }
 }
 
@@ -209,8 +213,9 @@ impl App {
 
     fn handle_redraw(&mut self) {
         let state = self.state.as_mut().unwrap();
-
-        dbg!(state.get_mouse_position_in_world());
+        if state.mouse_state.is_down() {
+            state.simulation.spawn(state.get_mouse_position_in_world());
+        }
 
         state.timer.update();
         state.mouse_state.update(&state.timer);
@@ -254,6 +259,7 @@ impl App {
             render_pass.set_bind_group(0, &state.bind_group, &[]);
             state.simulation_renderer.render(
                 &mut render_pass,
+                &state.queue,
                 &state.square_mesh,
                 &state.simulation,
             );

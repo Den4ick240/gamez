@@ -11,7 +11,8 @@ type Instance = Particle;
 
 impl Instance {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![1 => Float32x2];
+        const ATTRS: [wgpu::VertexAttribute; 4] =
+            wgpu::vertex_attr_array![1 => Float32x2, 2 => Float32x2, 3 => Float32, 4 => Float32x3];
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -34,9 +35,9 @@ fn round_buffer_size(unpadded_size: wgpu::BufferAddress) -> wgpu::BufferAddress 
     padded_size
 }
 
-const MAX_PARTICLES: u64 = 100;
+const MAX_PARTICLES: u64 = 10000;
 
-fn get_particle_buffer_size() -> u64 {
+fn get_particle_buffer_size() -> wgpu::BufferAddress {
     round_buffer_size((MAX_PARTICLES as usize * mem::size_of::<Particle>()) as wgpu::BufferAddress)
 }
 
@@ -49,7 +50,7 @@ impl SimulationRenderer {
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("SimulationInstanceBuffer"),
             size: get_particle_buffer_size(),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/simulation.wgsl"));
@@ -104,25 +105,23 @@ impl SimulationRenderer {
     pub fn render(
         &self,
         render_pass: &mut wgpu::RenderPass,
+        queue: &wgpu::Queue,
         square_mesh: &SquareMesh,
         simulation: &Simulation,
     ) {
-        self.write_buffer(simulation);
+        self.write_buffer(queue, simulation);
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_vertex_buffer(0, square_mesh.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-        render_pass.draw_indexed(
-            0..square_mesh.vertex_buffer.size() as u32,
-            0,
-            0..simulation.particles.len() as u32,
-        );
+        render_pass.draw(0..4, 0..simulation.particles.len() as u32);
     }
 
-    fn write_buffer(&self, simulation: &Simulation) {
-        let data = bytemuck::cast_slice(&simulation.particles);
-        let data_size = data.len() as usize;
-        let slice = self.instance_buffer.slice(0..data_size);
-        slice.get_mapped_range_mut()[..data_size].copy_from_slice(data);
+    fn write_buffer(&self, queue: &wgpu::Queue, simulation: &Simulation) {
+        queue.write_buffer(
+            &self.instance_buffer,
+            0,
+            bytemuck::cast_slice(&simulation.particles),
+        );
     }
 }

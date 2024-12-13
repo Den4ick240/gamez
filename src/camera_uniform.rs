@@ -23,7 +23,7 @@ impl CameraState {
             width,
             height,
             position: glam::vec2(0.0, 0.0),
-            fov: 100.0,
+            fov: 200.0,
             _padding: [0.0; 3],
         };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -46,6 +46,14 @@ impl CameraState {
         }
     }
 
+    pub fn get_size(&self) -> (f32, f32) {
+        (self.uniform.width, self.uniform.height)
+    }
+
+    pub fn get_fov(&self) -> f32 {
+        self.uniform.fov
+    }
+
     pub fn write_buffer(&mut self, queue: &wgpu::Queue) {
         if self.size_changed {
             queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&[self.uniform]));
@@ -55,5 +63,9 @@ impl CameraState {
 
     pub fn get_binding_resource(&self) -> wgpu::BindingResource<'_> {
         self.buffer.as_entire_binding()
+    }
+
+    pub fn get_world_position(&self) -> glam::Vec2 {
+        self.uniform.position
     }
 }

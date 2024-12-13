@@ -57,6 +57,10 @@ impl MouseState {
             f32::min((timer.ms_since_start() - self.click_ts) as f32 / 100.0, 1.0);
     }
 
+    pub fn is_down(&self) -> bool {
+        return self.uniform.is_clicked > 0;
+    }
+
     pub fn write_buffer(&self, queue: &wgpu::Queue) {
         queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&[self.uniform]));
     }
