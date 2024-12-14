@@ -125,7 +125,13 @@ impl AppState {
         });
 
         // let mouse_renderer = MouseRenderer::new(&device, &surface_config, &bind_group_layout);
-        let simulation = Simulation::new();
+        let mut simulation = Simulation::new();
+
+        simulation.on_camera_size(
+            size.width as f32,
+            size.height as f32,
+            camera_state.get_fov(),
+        );
         let simulation_renderer =
             SimulationRenderer::new(&device, &surface_config, &bind_group_layout);
 
@@ -147,9 +153,9 @@ impl AppState {
 
     fn resize_surface(&mut self, width: u32, height: u32) {
         self.camera_state.set_size(width as f32, height as f32);
-        self.simulation.square_width = self.camera_state.get_fov() * 0.95;
-        self.simulation.square_height =
-            self.camera_state.get_fov() * 0.95 * height as f32 / width as f32;
+
+        self.simulation
+            .on_camera_size(width as f32, height as f32, self.camera_state.get_fov());
 
         self.surface_config.width = width;
         self.surface_config.height = height;
@@ -319,6 +325,15 @@ impl ApplicationHandler for App {
                 PhysicalKey::Code(winit::keyboard::KeyCode::KeyT) => {
                     let state = self.get_app_state();
                     state.simulation.spawn(state.get_mouse_position_in_world());
+                }
+                PhysicalKey::Code(winit::keyboard::KeyCode::KeyR) => {
+                    let state = self.get_app_state();
+                    state.simulation = Simulation::new();
+
+                    let (width, height) = state.camera_state.get_size();
+                    state
+                        .simulation
+                        .on_camera_size(width, height, state.camera_state.get_fov());
                 }
                 PhysicalKey::Code(winit::keyboard::KeyCode::Escape) => {
                     println!("The escape key was pressed; stopping");

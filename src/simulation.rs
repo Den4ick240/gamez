@@ -44,6 +44,33 @@ impl Particle {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Pod, Zeroable)]
+pub struct Border {
+    pub top: f32,
+    pub left: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Border {
+    pub fn top_right(&self) -> glam::Vec2 {
+        glam::vec2(self.right, self.top)
+    }
+
+    pub fn top_left(&self) -> glam::Vec2 {
+        glam::vec2(self.left, self.top)
+    }
+
+    pub fn bottom_right(&self) -> glam::Vec2 {
+        glam::vec2(self.right, self.bottom)
+    }
+
+    pub fn bottom_left(&self) -> glam::Vec2 {
+        glam::vec2(self.left, self.bottom)
+    }
+}
+
 pub struct Simulation {
     pub particles: Vec<Particle>,
     resolutions: Vec<Resolution>,
@@ -53,6 +80,8 @@ pub struct Simulation {
     pub spawning_particle: Option<Particle>,
     pub show_debug: bool,
     pub animate: bool,
+    tracked_particle: Option<usize>,
+    pub borders: Vec<Border>,
 }
 
 struct Animation {
@@ -61,16 +90,38 @@ struct Animation {
 
 impl Simulation {
     pub fn new() -> Self {
+        let mut balls = get_balls(glam::vec2(12.0, 0.0), 1.0);
+        balls.push(Particle {
+            position: glam::vec2(-10.0, 0.0),
+            velocity: glam::vec2(0.0, 0.0),
+            radius: 1.0,
+            color: get_random_color(),
+        });
+        let animations = balls
+            .iter()
+            .map(|_| Animation { final_size: 1.0 })
+            .collect();
+
         Self {
-            particles: vec![],
+            // particles: vec![],
+            particles: balls,
             resolutions: vec![],
-            animations: vec![],
-            square_width: 20.0,
-            square_height: 20.0,
+            // animations: vec![],
+            animations,
+            square_width: 200.0,
+            square_height: 200.0,
             spawning_particle: None,
             show_debug: false,
             animate: false,
+            tracked_particle: None,
+            borders: vec![],
         }
+    }
+
+    pub fn on_camera_size(&mut self, width: f32, height: f32, fov: f32) {
+        self.square_width = fov;
+        self.square_height = fov * height / width;
+        self.borders = get_borders(self.square_height, self.square_width);
     }
 
     pub fn spawn(&mut self, position: glam::Vec2) {
@@ -96,6 +147,7 @@ impl Simulation {
             self.resolve_collisions();
             self.advance(dt);
         }
+        self.delete_outsiders();
     }
 
     fn animate(&mut self, dt: f32) {
@@ -108,29 +160,97 @@ impl Simulation {
         }
     }
 
+    fn delete_outsiders(&mut self) {
+        let mut i = 0;
+        while i < self.particles.len() {
+            let ele = &self.particles[i];
+            let right_bound = self.square_width / 2.0 + ele.radius;
+            let left_bound = -self.square_width / 2.0 - ele.radius;
+            let top_bound = self.square_height / 2.0 + ele.radius;
+            let bottom_bound = -self.square_height / 2.0 - ele.radius;
+            if ele.position.y > top_bound
+                || ele.position.y < bottom_bound
+                || ele.position.x > right_bound
+                || ele.position.x < left_bound
+            {
+                if Some(i) == self.tracked_particle {
+                    self.tracked_particle = None;
+                }
+                if Some(self.particles.len() - 1) == self.tracked_particle {
+                    self.tracked_particle = Some(i);
+                }
+                self.particles.swap_remove(i);
+                self.animations.swap_remove(i);
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    fn collide_point(particle: &mut Particle, point: glam::Vec2, distance: f32) -> bool {
+        //     let bounds = bound_radius - ele.radius;
+        //     let dst = ele.position.length();
+        //     if dst > bounds {
+        //         ele.position = ele.position.normalize() * bounds;
+        //         ele.velocity = ele.velocity.reflect(ele.position.normalize() * 0.95);
+        //     }
+        let v = particle.position - point;
+        let dst = v.length();
+        let norm = v.normalize();
+        if dst < distance + particle.radius {
+            particle.position = point + norm * (distance + particle.radius);
+            particle.velocity = particle.velocity.reflect(norm);
+            true
+        } else {
+            false
+        }
+    }
+
     fn apply_constraints(&mut self) {
         for ele in &mut self.particles {
-            let right_bound = self.square_width / 2.0 - ele.radius;
-            let left_bound = -self.square_width / 2.0 + ele.radius;
-            let top_bound = self.square_height / 2.0 - ele.radius;
-            let bottom_bound = -self.square_height / 2.0 + ele.radius;
-            if ele.position.y > top_bound {
-                ele.position.y = top_bound;
-                ele.velocity.y = -ele.velocity.y;
-            }
-            if ele.position.y < bottom_bound {
-                ele.position.y = bottom_bound;
-                ele.velocity.y = -ele.velocity.y;
-            }
-            if ele.position.x > right_bound {
-                ele.position.x = right_bound;
-                ele.velocity.x = -ele.velocity.x;
-            }
-            if ele.position.x < left_bound {
-                ele.position.x = left_bound;
-                ele.velocity.x = -ele.velocity.x;
+            for border in &self.borders {
+                if (border.left..border.right).contains(&ele.position.x) {
+                    Self::collide_point(
+                        ele,
+                        glam::vec2((border.bottom + border.top) / 2.0, ele.position.y),
+                        (border.right - border.left) / 2.0,
+                    );
+                } else if (border.bottom..border.top).contains(&ele.position.y) {
+                    Self::collide_point(
+                        ele,
+                        glam::vec2(ele.position.x, (border.top + border.bottom) / 2.0),
+                        (border.top - border.bottom) / 2.0,
+                    );
+                } else {
+                    let _ = Self::collide_point(ele, border.top_right(), 0.0)
+                        || Self::collide_point(ele, border.top_left(), 0.0)
+                        || Self::collide_point(ele, border.bottom_right(), 0.0)
+                        || Self::collide_point(ele, border.bottom_left(), 0.0);
+                }
             }
         }
+        // for ele in &mut self.particles {
+        //     let right_bound = self.square_width / 2.0 - ele.radius;
+        //     let left_bound = -self.square_width / 2.0 + ele.radius;
+        //     let top_bound = self.square_height / 2.0 - ele.radius;
+        //     let bottom_bound = -self.square_height / 2.0 + ele.radius;
+        //     if ele.position.y > top_bound {
+        //         ele.position.y = top_bound;
+        //         ele.velocity.y = -ele.velocity.y;
+        //     }
+        //     if ele.position.y < bottom_bound {
+        //         ele.position.y = bottom_bound;
+        //         ele.velocity.y = -ele.velocity.y;
+        //     }
+        //     if ele.position.x > right_bound {
+        //         ele.position.x = right_bound;
+        //         ele.velocity.x = -ele.velocity.x;
+        //     }
+        // if ele.position.x < left_bound {
+        //     ele.position.x = left_bound;
+        //     ele.velocity.x = -ele.velocity.x;
+        // }
+        // }
         // let bound_radius = f32::min(self.square_width, self.square_height) / 2.0;
         // for ele in &mut self.particles {
         //     let bounds = bound_radius - ele.radius;
@@ -165,7 +285,7 @@ impl Simulation {
                     self.resolutions[j].movement += res;
 
                     let zmf_velocity = get_zmf_velocity(ele, ele2);
-                    const DAMPING: f32 = 0.9;
+                    const DAMPING: f32 = 0.90;
                     let ele_zmf_v = (ele.velocity - zmf_velocity).length() * DAMPING;
                     let ele2_zmf_v = (ele2.velocity - zmf_velocity).length() * DAMPING;
                     let ele_zmf_u = -normal * ele_zmf_v;
@@ -177,23 +297,26 @@ impl Simulation {
             }
         }
 
-        for (ele, res) in self.particles.iter_mut().zip(&self.resolutions) {
+        for (i, (ele, res)) in self.particles.iter_mut().zip(&self.resolutions).enumerate() {
+            if Some(i) == self.tracked_particle {
+                continue;
+            }
             ele.position += res.movement;
             ele.velocity = res.velocity;
         }
     }
 
     fn advance(&mut self, dt: f32) {
-        for ele in &mut self.particles {
+        for (i, ele) in self.particles.iter_mut().enumerate() {
+            if Some(i) == self.tracked_particle {
+                continue;
+            }
             // const gravity = 19.0;
             const GRAVITY: f32 = 0.0;
-            let acceleration = glam::vec2(0.0, -GRAVITY) - ele.velocity * 0.2;
+            let acceleration = glam::vec2(0.0, -GRAVITY) - ele.velocity * 0.5;
 
             ele.position = ele.position + ele.velocity * dt + 0.5 * acceleration * dt * dt;
             ele.velocity = ele.velocity + acceleration * dt;
-            // let speed = ele.position - ele.old_position;
-            // ele.old_position = ele.position;
-            // ele.position = ele.position + speed + acceleration * dt * dt;
         }
     }
 
@@ -202,6 +325,7 @@ impl Simulation {
             return self
                 .spawning_particle
                 .iter()
+                .chain(self.tracked_particle.map(|ele| &self.particles[ele]))
                 .map(|ele| Arrow::from(ele))
                 .collect();
         }
@@ -214,12 +338,17 @@ impl Simulation {
     }
 
     pub fn set_spawn_velocity_position(&mut self, position: glam::Vec2) {
+        if let Some(tracked_particle) = self.tracked_particle {
+            let particle = &mut self.particles[tracked_particle];
+            particle.velocity = (position - particle.position) * 3.0;
+        }
         if let Some(particle) = &mut self.spawning_particle {
-            particle.velocity = position - particle.position;
+            particle.velocity = (position - particle.position) * 3.0;
         }
     }
 
     pub fn release_spawn(&mut self) {
+        self.tracked_particle = None;
         if let Some(mut particle) = self.spawning_particle.take() {
             self.animations.push(Animation {
                 final_size: particle.radius,
@@ -231,6 +360,14 @@ impl Simulation {
 
     pub fn setup_spawning(&mut self, position: glam::Vec2) {
         // let final_size = rand::thread_rng().gen_range(0.5..1.5);
+        for (i, particle) in self.particles.iter_mut().enumerate() {
+            if (particle.position - position).length() < particle.radius {
+                self.tracked_particle = Some(i);
+                particle.velocity = glam::vec2(0.0, 0.0);
+                return;
+            }
+        }
+        return;
         let final_size = 1.0;
         self.spawning_particle = Some(Particle {
             position,
@@ -313,4 +450,70 @@ impl From<&Particle> for Arrow {
 struct Resolution {
     movement: glam::Vec2,
     velocity: glam::Vec2,
+}
+
+fn get_balls(at: glam::Vec2, radius: f32) -> Vec<Particle> {
+    let placing_radius = radius;
+    let dx = placing_radius * 1.73205080757;
+    let dy = placing_radius * 2.0;
+    let offset = at - glam::vec2(2.5 * dx, 2.5 * dy);
+
+    let mut res: Vec<Particle> = vec![];
+    res.reserve(15);
+    for x in 0..5 {
+        for y in 0..(x + 1) {
+            res.push(Particle {
+                position: offset
+                    + glam::vec2(x as f32 * dx, (y as f32 + 0.5 * (5 - x) as f32) * dy),
+                velocity: glam::vec2(0.0, 0.0),
+                radius,
+                color: get_random_color(),
+            });
+        }
+    }
+    res
+}
+
+pub fn get_borders(square_height: f32, square_width: f32) -> Vec<Border> {
+    const HOLE_RADIUS: f32 = 3.0;
+    const BORDER_WIDTH: f32 = 1.0;
+
+    vec![
+        Border {
+            top: square_height / 2.0 - HOLE_RADIUS,
+            left: -square_width / 2.0,
+            right: BORDER_WIDTH - square_width / 2.0,
+            bottom: -square_height / 2.0 + HOLE_RADIUS,
+        },
+        Border {
+            top: square_height / 2.0 - HOLE_RADIUS,
+            left: square_width / 2.0 - BORDER_WIDTH,
+            right: square_width / 2.0,
+            bottom: -square_height / 2.0 + HOLE_RADIUS,
+        },
+        Border {
+            top: square_height / 2.0,
+            bottom: square_height / 2.0 - BORDER_WIDTH,
+            left: -square_width / 2.0 + HOLE_RADIUS,
+            right: -HOLE_RADIUS / 2.0,
+        },
+        Border {
+            top: square_height / 2.0,
+            bottom: square_height / 2.0 - BORDER_WIDTH,
+            left: HOLE_RADIUS / 2.0,
+            right: square_width / 2.0 - HOLE_RADIUS,
+        },
+        Border {
+            top: BORDER_WIDTH - square_height / 2.0,
+            bottom: -square_height / 2.0,
+            left: -square_width / 2.0 + HOLE_RADIUS,
+            right: -HOLE_RADIUS / 2.0,
+        },
+        Border {
+            top: BORDER_WIDTH - square_height / 2.0,
+            bottom: -square_height / 2.0,
+            left: HOLE_RADIUS / 2.0,
+            right: square_width / 2.0 - HOLE_RADIUS,
+        },
+    ]
 }
