@@ -147,6 +147,10 @@ impl AppState {
 
     fn resize_surface(&mut self, width: u32, height: u32) {
         self.camera_state.set_size(width as f32, height as f32);
+        self.simulation.square_width = self.camera_state.get_fov() * 0.95;
+        self.simulation.square_height =
+            self.camera_state.get_fov() * 0.95 * height as f32 / width as f32;
+
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
@@ -154,8 +158,12 @@ impl AppState {
 
     fn on_click(&mut self, pressed: bool) {
         self.mouse_state.set_is_clicked(pressed);
-        if pressed {
+        if !pressed {
             // self.simulation.spawn(self.get_mouse_position_in_world());
+            self.simulation.release_spawn();
+        } else {
+            self.simulation
+                .setup_spawning(self.get_mouse_position_in_world());
         }
     }
 
@@ -214,7 +222,9 @@ impl App {
     fn handle_redraw(&mut self) {
         let state = self.state.as_mut().unwrap();
         if state.mouse_state.is_down() {
-            state.simulation.spawn(state.get_mouse_position_in_world());
+            state
+                .simulation
+                .set_spawn_velocity_position(state.get_mouse_position_in_world());
         }
 
         state.timer.update();
@@ -306,6 +316,10 @@ impl ApplicationHandler for App {
                 event,
                 is_synthetic: _,
             } => match event.physical_key {
+                PhysicalKey::Code(winit::keyboard::KeyCode::KeyT) => {
+                    let state = self.get_app_state();
+                    state.simulation.spawn(state.get_mouse_position_in_world());
+                }
                 PhysicalKey::Code(winit::keyboard::KeyCode::Escape) => {
                     println!("The escape key was pressed; stopping");
                     event_loop.exit();

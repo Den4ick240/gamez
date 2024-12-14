@@ -1,4 +1,5 @@
 mod app;
+mod arrow_renderer;
 mod camera_uniform;
 mod mouse_renderer;
 mod mouse_uniform;
@@ -6,6 +7,7 @@ mod simulation;
 mod simulation_renderer;
 mod square_mesh;
 mod timer;
+mod wgpu_utils;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 

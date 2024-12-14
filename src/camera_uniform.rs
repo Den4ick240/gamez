@@ -23,7 +23,7 @@ impl CameraState {
             width,
             height,
             position: glam::vec2(0.0, 0.0),
-            fov: 200.0,
+            fov: 55.0,
             _padding: [0.0; 3],
         };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

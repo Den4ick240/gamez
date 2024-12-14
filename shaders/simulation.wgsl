@@ -26,14 +26,20 @@ struct Output {
   @location(1) color: vec3<f32>,
 }
 
+fn to_camera_pos(world_pos: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(
+        (world_pos.x - camera.position.x) * 2 / camera.fov,
+        (world_pos.y - camera.position.y) * 2 / (camera.fov * camera.height / camera.width)
+    );
+}
+
 @vertex
 fn vs_mouse(input: Input, instance: InstanceInput) -> Output {
     var radius = instance.radius;
     var world_pos = instance.position + input.position * radius;
-    var x = (world_pos.x - camera.position.x) * 2 / camera.fov;
-    var y = (world_pos.y - camera.position.y) * 2 / (camera.fov * camera.height / camera.width);
+    var camera_pos = to_camera_pos(world_pos);
     var out: Output;
-    out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    out.clip_position = vec4<f32>(camera_pos.xy, 0.0, 1.0);
     out.pos = input.position;
     out.color = instance.color;
     return out;
