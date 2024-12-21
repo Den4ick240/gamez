@@ -1,9 +1,14 @@
-use std::cmp::min;
-
 use bytemuck::{Pod, Zeroable};
 use rand::Rng;
 
 use crate::{arrow_renderer::Arrow, timer::Timer};
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Pod, Zeroable)]
+pub struct JointInstance {
+    start: glam::Vec2,
+    end: glam::Vec2,
+}
 
 fn get_random_color() -> glam::Vec3 {
     let colors = [
@@ -31,6 +36,12 @@ pub struct Particle {
     pub velocity: glam::Vec2,
     pub radius: f32,
     pub color: glam::Vec3,
+}
+
+struct Joint {
+    start: usize,
+    end: usize,
+    length: f32,
 }
 
 impl Particle {
@@ -71,9 +82,13 @@ impl Border {
     }
 }
 
+struct JointCreation {
+    pub start: usize,
+    pub end: glam::Vec2,
+}
+
 pub struct Simulation {
     pub particles: Vec<Particle>,
-    resolutions: Vec<Resolution>,
     animations: Vec<Animation>,
     pub square_width: f32,
     pub square_height: f32,
@@ -82,6 +97,9 @@ pub struct Simulation {
     pub animate: bool,
     tracked_particle: Option<usize>,
     pub borders: Vec<Border>,
+    joints: Vec<Joint>,
+    last_spawn_time: u64,
+    joint_creation: Option<JointCreation>,
 }
 
 struct Animation {
@@ -103,25 +121,48 @@ impl Simulation {
             .collect();
 
         Self {
+            joint_creation: None,
+            joints: vec![],
             // particles: vec![],
             particles: balls,
-            resolutions: vec![],
             // animations: vec![],
             animations,
             square_width: 200.0,
             square_height: 200.0,
             spawning_particle: None,
-            show_debug: false,
+            show_debug: true,
             animate: false,
             tracked_particle: None,
-            borders: vec![],
+            borders: vec![Border {
+                top: -10.0,
+                bottom: -14.0,
+                left: 5.0,
+                right: 10.0,
+            }],
+            last_spawn_time: 0,
         }
     }
 
     pub fn on_camera_size(&mut self, width: f32, height: f32, fov: f32) {
         self.square_width = fov;
         self.square_height = fov * height / width;
-        self.borders = get_borders(self.square_height, self.square_width);
+        // self.borders = get_borders(self.square_height, self.square_width);
+    }
+
+    pub fn spawn_flow(&mut self, timer: &Timer) {
+        if self.last_spawn_time > timer.ms_since_start() - 40 {
+            return;
+        }
+        self.last_spawn_time = timer.ms_since_start();
+        let final_size = 1.0;
+        self.particles.push(Particle {
+            position: glam::vec2(-10.0, 5.0),
+            velocity: glam::vec2(30.0, 0.0),
+            radius: 0.0000001,
+            // radius: final_size,
+            color: get_random_color(),
+        });
+        self.animations.push(Animation { final_size })
     }
 
     pub fn spawn(&mut self, position: glam::Vec2) {
@@ -173,6 +214,16 @@ impl Simulation {
                 || ele.position.x > right_bound
                 || ele.position.x < left_bound
             {
+                self.joints.retain(|j| j.start != i && j.end != i);
+                for joint in self.joints.iter_mut() {
+                    let last = self.particles.len() - 1;
+                    if joint.start == last {
+                        joint.start = i;
+                    }
+                    if joint.end == last {
+                        joint.end = i;
+                    }
+                }
                 if Some(i) == self.tracked_particle {
                     self.tracked_particle = None;
                 }
@@ -207,19 +258,35 @@ impl Simulation {
     }
 
     fn apply_constraints(&mut self) {
+        for joint in &self.joints {
+            let length = joint.length;
+            let (start, end) = if joint.start > joint.end {
+                (joint.end, joint.start)
+            } else {
+                (joint.start, joint.end)
+            };
+            let (prev, next) = self.particles.split_at_mut(end);
+            let ele = &mut prev[start];
+            let ele2 = &mut next[0];
+            let norm = (ele2.position - ele.position).normalize_or_zero();
+            let distance = ele.position.distance(ele2.position);
+            let diff = distance - length;
+            ele.position += norm * diff * 0.5;
+            ele2.position -= norm * diff * 0.5;
+        }
         for ele in &mut self.particles {
             for border in &self.borders {
                 if (border.left..border.right).contains(&ele.position.x) {
                     Self::collide_point(
                         ele,
-                        glam::vec2((border.bottom + border.top) / 2.0, ele.position.y),
-                        (border.right - border.left) / 2.0,
+                        glam::vec2(ele.position.x, (border.bottom + border.top) / 2.0),
+                        (border.top - border.bottom) / 2.0,
                     );
                 } else if (border.bottom..border.top).contains(&ele.position.y) {
                     Self::collide_point(
                         ele,
-                        glam::vec2(ele.position.x, (border.top + border.bottom) / 2.0),
-                        (border.top - border.bottom) / 2.0,
+                        glam::vec2((border.right + border.left) / 2.0, ele.position.y),
+                        (border.right - border.left) / 2.0,
                     );
                 } else {
                     let _ = Self::collide_point(ele, border.top_right(), 0.0)
@@ -229,28 +296,28 @@ impl Simulation {
                 }
             }
         }
-        // for ele in &mut self.particles {
-        //     let right_bound = self.square_width / 2.0 - ele.radius;
-        //     let left_bound = -self.square_width / 2.0 + ele.radius;
-        //     let top_bound = self.square_height / 2.0 - ele.radius;
-        //     let bottom_bound = -self.square_height / 2.0 + ele.radius;
-        //     if ele.position.y > top_bound {
-        //         ele.position.y = top_bound;
-        //         ele.velocity.y = -ele.velocity.y;
-        //     }
-        //     if ele.position.y < bottom_bound {
-        //         ele.position.y = bottom_bound;
-        //         ele.velocity.y = -ele.velocity.y;
-        //     }
-        //     if ele.position.x > right_bound {
-        //         ele.position.x = right_bound;
-        //         ele.velocity.x = -ele.velocity.x;
-        //     }
-        // if ele.position.x < left_bound {
-        //     ele.position.x = left_bound;
-        //     ele.velocity.x = -ele.velocity.x;
-        // }
-        // }
+        for ele in &mut self.particles {
+            let right_bound = self.square_width / 2.0 - ele.radius;
+            let left_bound = -self.square_width / 2.0 + ele.radius;
+            let top_bound = self.square_height / 2.0 - ele.radius;
+            let bottom_bound = -self.square_height / 2.0 + ele.radius;
+            if ele.position.y > top_bound {
+                ele.position.y = top_bound;
+                ele.velocity.y = -ele.velocity.y;
+            }
+            if ele.position.y < bottom_bound {
+                ele.position.y = bottom_bound;
+                ele.velocity.y = -ele.velocity.y;
+            }
+            if ele.position.x > right_bound {
+                ele.position.x = right_bound;
+                ele.velocity.x = -ele.velocity.x;
+            }
+            if ele.position.x < left_bound {
+                ele.position.x = left_bound;
+                ele.velocity.x = -ele.velocity.x;
+            }
+        }
         // let bound_radius = f32::min(self.square_width, self.square_height) / 2.0;
         // for ele in &mut self.particles {
         //     let bounds = bound_radius - ele.radius;
@@ -263,57 +330,50 @@ impl Simulation {
     }
 
     fn resolve_collisions(&mut self) {
-        self.resolutions.reserve(self.particles.len());
-        self.resolutions.clear();
-        for particle in &self.particles {
-            self.resolutions.push(Resolution {
-                movement: glam::vec2(0.0, 0.0),
-                velocity: particle.velocity,
-            });
-        }
         for i in 0..self.particles.len() {
-            for j in (i + 1)..self.particles.len() {
-                let ele = &self.particles[i];
-                let ele2 = &self.particles[j];
+            //can't be empty since we only enter the loop if len > 0
+            let (ele, others) = self.particles[i..].split_first_mut().unwrap();
+            for (_j, ele2) in others.iter_mut().enumerate() {
+                let j = i + _j + 1;
                 let dst = (ele.position - ele2.position).length();
                 let min_dst = ele.radius + ele2.radius;
                 if dst < min_dst {
                     let normal = (ele2.position - ele.position).normalize();
                     let penetration = f32::min(0.01, (min_dst - dst) / 2.0);
                     let res = normal * penetration;
-                    self.resolutions[i].movement -= res;
-                    self.resolutions[j].movement += res;
+                    if Some(i) != self.tracked_particle {
+                        ele.position -= res;
+                    }
+                    if Some(j) != self.tracked_particle {
+                        ele2.position += res;
+                    }
 
                     let zmf_velocity = get_zmf_velocity(ele, ele2);
-                    const DAMPING: f32 = 0.90;
+                    const DAMPING: f32 = 1.0;
                     let ele_zmf_v = (ele.velocity - zmf_velocity).length() * DAMPING;
                     let ele2_zmf_v = (ele2.velocity - zmf_velocity).length() * DAMPING;
                     let ele_zmf_u = -normal * ele_zmf_v;
                     let ele2_zmf_u = normal * ele2_zmf_v;
 
-                    self.resolutions[i].velocity = zmf_velocity + ele_zmf_u;
-                    self.resolutions[j].velocity = zmf_velocity + ele2_zmf_u;
+                    if Some(i) != self.tracked_particle {
+                        ele.velocity = zmf_velocity + ele_zmf_u;
+                    }
+                    if Some(j) != self.tracked_particle {
+                        ele2.velocity = zmf_velocity + ele2_zmf_u;
+                    }
                 }
             }
         }
-
-        for (i, (ele, res)) in self.particles.iter_mut().zip(&self.resolutions).enumerate() {
-            if Some(i) == self.tracked_particle {
-                continue;
-            }
-            ele.position += res.movement;
-            ele.velocity = res.velocity;
-        }
     }
-
     fn advance(&mut self, dt: f32) {
         for (i, ele) in self.particles.iter_mut().enumerate() {
             if Some(i) == self.tracked_particle {
                 continue;
             }
-            // const gravity = 19.0;
             const GRAVITY: f32 = 0.0;
-            let acceleration = glam::vec2(0.0, -GRAVITY) - ele.velocity * 0.5;
+            let acceleration = glam::Vec2::ZERO;
+
+            // let acceleration = glam::vec2(0.0, -GRAVITY) - ele.velocity * 0.25;
 
             ele.position = ele.position + ele.velocity * dt + 0.5 * acceleration * dt * dt;
             ele.velocity = ele.velocity + acceleration * dt;
@@ -338,12 +398,67 @@ impl Simulation {
     }
 
     pub fn set_spawn_velocity_position(&mut self, position: glam::Vec2) {
-        if let Some(tracked_particle) = self.tracked_particle {
+        if let Some(joint_creation) = &mut self.joint_creation {
+            joint_creation.end = position;
+        } else if let Some(tracked_particle) = self.tracked_particle {
             let particle = &mut self.particles[tracked_particle];
             particle.velocity = (position - particle.position) * 3.0;
         }
         if let Some(particle) = &mut self.spawning_particle {
             particle.velocity = (position - particle.position) * 3.0;
+        }
+    }
+
+    pub fn end_join(&mut self) {
+        if let Some(joint_creation) = &self.joint_creation {
+            if let Some((i, particle)) = self.find_particle(joint_creation.end) {
+                self.joints.push(Joint {
+                    start: joint_creation.start,
+                    end: i,
+                    length: particle
+                        .position
+                        .distance(self.particles[joint_creation.start].position),
+                });
+            } else {
+                let final_size = 1.0;
+                self.particles.push(Particle {
+                    position: joint_creation.end,
+                    velocity: glam::vec2(0.0, 0.0),
+                    radius: 0.0000001,
+                    // radius: final_size,
+                    color: get_random_color(),
+                });
+                self.animations.push(Animation { final_size });
+                self.joints.push(Joint {
+                    start: joint_creation.start,
+                    end: self.particles.len() - 1,
+                    length: self.particles[self.particles.len() - 1]
+                        .position
+                        .distance(self.particles[joint_creation.start].position),
+                });
+            }
+        }
+        self.joint_creation = None
+    }
+
+    fn find_particle(&self, position: glam::Vec2) -> Option<(usize, &Particle)> {
+        for (i, particle) in self.particles.iter().enumerate() {
+            if (particle.position - position).length() < particle.radius {
+                return Some((i, particle));
+            }
+        }
+        None
+    }
+
+    pub fn start_joint(&mut self, position: glam::Vec2) {
+        for (i, particle) in self.particles.iter_mut().enumerate() {
+            if (particle.position - position).length() < particle.radius {
+                self.joint_creation = Some(JointCreation {
+                    start: i,
+                    end: position,
+                });
+                return;
+            }
         }
     }
 
@@ -419,6 +534,20 @@ impl Simulation {
             .chain(self.get_zmf_particle().into_iter())
             .collect::<Vec<_>>()
     }
+
+    pub fn get_joints(&self) -> Vec<JointInstance> {
+        self.joints
+            .iter()
+            .map(|j| JointInstance {
+                start: self.particles[j.start].position,
+                end: self.particles[j.end].position,
+            })
+            .chain(self.joint_creation.iter().map(|j| JointInstance {
+                start: self.particles[j.start].position,
+                end: j.end,
+            }))
+            .collect()
+    }
 }
 
 fn get_zmf(first: &Particle, second: &Particle) -> Particle {
@@ -445,11 +574,6 @@ impl From<&Particle> for Arrow {
             norm: particle.velocity.length() / 3.0,
         }
     }
-}
-
-struct Resolution {
-    movement: glam::Vec2,
-    velocity: glam::Vec2,
 }
 
 fn get_balls(at: glam::Vec2, radius: f32) -> Vec<Particle> {

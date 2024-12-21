@@ -2,6 +2,7 @@ mod app;
 mod arrow_renderer;
 mod border_renderer;
 mod camera_uniform;
+mod joint_renderer;
 mod mouse_renderer;
 mod mouse_uniform;
 mod simulation;

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use winit::{
-    application::ApplicationHandler, dpi::PhysicalSize, event::WindowEvent, keyboard::PhysicalKey,
+    application::ApplicationHandler,
+    dpi::PhysicalSize,
+    event::{MouseButton, WindowEvent},
+    keyboard::PhysicalKey,
     window::Window,
 };
 
@@ -162,7 +165,16 @@ impl AppState {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    fn on_click(&mut self, pressed: bool) {
+    fn on_click(&mut self, pressed: bool, is_right: bool) {
+        if is_right {
+            if pressed {
+                self.simulation
+                    .start_joint(self.get_mouse_position_in_world());
+            } else {
+                self.simulation.end_join();
+            }
+            return;
+        }
         self.mouse_state.set_is_clicked(pressed);
         if !pressed {
             // self.simulation.spawn(self.get_mouse_position_in_world());
@@ -227,11 +239,9 @@ impl App {
 
     fn handle_redraw(&mut self) {
         let state = self.state.as_mut().unwrap();
-        if state.mouse_state.is_down() {
-            state
-                .simulation
-                .set_spawn_velocity_position(state.get_mouse_position_in_world());
-        }
+        state
+            .simulation
+            .set_spawn_velocity_position(state.get_mouse_position_in_world());
 
         state.timer.update();
         state.mouse_state.update(&state.timer);
@@ -312,10 +322,11 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput {
                 device_id: _,
                 state,
-                button: _,
-            } => self
-                .get_app_state()
-                .on_click(state == winit::event::ElementState::Pressed),
+                button,
+            } => self.get_app_state().on_click(
+                state == winit::event::ElementState::Pressed,
+                button == MouseButton::Right,
+            ),
 
             WindowEvent::KeyboardInput {
                 device_id: _,
@@ -338,6 +349,11 @@ impl ApplicationHandler for App {
                 PhysicalKey::Code(winit::keyboard::KeyCode::Escape) => {
                     println!("The escape key was pressed; stopping");
                     event_loop.exit();
+                }
+
+                PhysicalKey::Code(winit::keyboard::KeyCode::KeyF) => {
+                    let state = self.get_app_state();
+                    state.simulation.spawn_flow(&state.timer);
                 }
                 _ => (),
             },
