@@ -33,9 +33,8 @@ impl AppState {
     async fn new(
         instance: &wgpu::Instance,
         surface: wgpu::Surface<'static>,
-        window: &Window,
+        size: &PhysicalSize<u32>,
     ) -> Self {
-        let size = window.inner_size();
         let power_pref = wgpu::PowerPreference::HighPerformance;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -223,7 +222,7 @@ impl App {
             .create_surface(window.clone())
             .expect("Failed to create surface!");
 
-        let state = AppState::new(&self.instance, surface, &window).await;
+        let state = AppState::new(&self.instance, surface, &window.inner_size()).await;
 
         self.window.get_or_insert(window);
         self.state.get_or_insert(state);

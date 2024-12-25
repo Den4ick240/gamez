@@ -34,6 +34,7 @@ fn get_random_color() -> glam::Vec3 {
 pub struct Particle {
     pub position: glam::Vec2,
     pub velocity: glam::Vec2,
+    pub mass: f32,
     pub radius: f32,
     pub color: glam::Vec3,
 }
@@ -42,17 +43,6 @@ struct Joint {
     start: usize,
     end: usize,
     length: f32,
-}
-
-impl Particle {
-    pub fn new(position: glam::Vec2) -> Self {
-        Self {
-            position,
-            velocity: glam::vec2(1.0, 1.0),
-            radius: rand::thread_rng().gen_range(0.5..1.5),
-            color: get_random_color(),
-        }
-    }
 }
 
 #[repr(C)]
@@ -89,21 +79,15 @@ struct JointCreation {
 
 pub struct Simulation {
     pub particles: Vec<Particle>,
-    animations: Vec<Animation>,
     pub square_width: f32,
     pub square_height: f32,
     pub spawning_particle: Option<Particle>,
     pub show_debug: bool,
-    pub animate: bool,
     tracked_particle: Option<usize>,
     pub borders: Vec<Border>,
     joints: Vec<Joint>,
     last_spawn_time: u64,
     joint_creation: Option<JointCreation>,
-}
-
-struct Animation {
-    final_size: f32,
 }
 
 impl Simulation {
@@ -113,25 +97,18 @@ impl Simulation {
             position: glam::vec2(-10.0, 0.0),
             velocity: glam::vec2(0.0, 0.0),
             radius: 1.0,
+            mass: 1.0,
             color: get_random_color(),
         });
-        let animations = balls
-            .iter()
-            .map(|_| Animation { final_size: 1.0 })
-            .collect();
 
         Self {
             joint_creation: None,
             joints: vec![],
-            // particles: vec![],
             particles: balls,
-            // animations: vec![],
-            animations,
             square_width: 200.0,
             square_height: 200.0,
             spawning_particle: None,
-            show_debug: true,
-            animate: false,
+            show_debug: false,
             tracked_particle: None,
             borders: vec![Border {
                 top: -10.0,
@@ -154,51 +131,35 @@ impl Simulation {
             return;
         }
         self.last_spawn_time = timer.ms_since_start();
-        let final_size = 1.0;
         self.particles.push(Particle {
+            mass: 1.0,
             position: glam::vec2(-10.0, 5.0),
             velocity: glam::vec2(30.0, 0.0),
-            radius: 0.0000001,
-            // radius: final_size,
+            radius: 1.0,
             color: get_random_color(),
         });
-        self.animations.push(Animation { final_size })
     }
 
     pub fn spawn(&mut self, position: glam::Vec2) {
-        // let final_size = rand::thread_rng().gen_range(0.5..1.5);
-        let final_size = 1.0;
         self.particles.push(Particle {
+            mass: 1.0,
             position,
             velocity: glam::vec2(0.0, 0.0),
-            radius: 0.0000001,
-            // radius: final_size,
+            radius: 1.0,
             color: get_random_color(),
         });
-        self.animations.push(Animation { final_size })
     }
 
     pub fn update(&mut self, timer: &Timer) {
         let n = 40;
         let dt = timer.delta_time() / n as f32;
 
-        self.animate(timer.delta_time());
         for _ in 0..n {
             self.apply_constraints();
             self.resolve_collisions();
             self.advance(dt);
         }
         self.delete_outsiders();
-    }
-
-    fn animate(&mut self, dt: f32) {
-        for (ele, animation) in self.particles.iter_mut().zip(&self.animations) {
-            if !self.animate {
-                ele.radius = animation.final_size;
-            } else if animation.final_size > ele.radius {
-                ele.radius += 1.0 * dt;
-            }
-        }
     }
 
     fn delete_outsiders(&mut self) {
@@ -231,7 +192,6 @@ impl Simulation {
                     self.tracked_particle = Some(i);
                 }
                 self.particles.swap_remove(i);
-                self.animations.swap_remove(i);
                 continue;
             }
             i += 1;
@@ -420,15 +380,13 @@ impl Simulation {
                         .distance(self.particles[joint_creation.start].position),
                 });
             } else {
-                let final_size = 1.0;
                 self.particles.push(Particle {
+                    mass: 1.0,
                     position: joint_creation.end,
                     velocity: glam::vec2(0.0, 0.0),
-                    radius: 0.0000001,
-                    // radius: final_size,
+                    radius: 1.0,
                     color: get_random_color(),
                 });
-                self.animations.push(Animation { final_size });
                 self.joints.push(Joint {
                     start: joint_creation.start,
                     end: self.particles.len() - 1,
@@ -465,16 +423,12 @@ impl Simulation {
     pub fn release_spawn(&mut self) {
         self.tracked_particle = None;
         if let Some(mut particle) = self.spawning_particle.take() {
-            self.animations.push(Animation {
-                final_size: particle.radius,
-            });
             particle.radius = 0.0001;
             self.particles.push(particle);
         }
     }
 
     pub fn setup_spawning(&mut self, position: glam::Vec2) {
-        // let final_size = rand::thread_rng().gen_range(0.5..1.5);
         for (i, particle) in self.particles.iter_mut().enumerate() {
             if (particle.position - position).length() < particle.radius {
                 self.tracked_particle = Some(i);
@@ -483,11 +437,11 @@ impl Simulation {
             }
         }
         return;
-        let final_size = 1.0;
         self.spawning_particle = Some(Particle {
+            mass: 1.0,
             position,
             velocity: glam::vec2(0.0, 0.0),
-            radius: final_size,
+            radius: 1.0,
             color: get_random_color(),
         })
     }
@@ -552,6 +506,7 @@ impl Simulation {
 
 fn get_zmf(first: &Particle, second: &Particle) -> Particle {
     Particle {
+        mass: 1.0,
         position: (first.position * first.radius + second.position * second.radius)
             / (first.radius + second.radius),
         velocity: get_zmf_velocity(first, second),
@@ -587,6 +542,7 @@ fn get_balls(at: glam::Vec2, radius: f32) -> Vec<Particle> {
     for x in 0..5 {
         for y in 0..(x + 1) {
             res.push(Particle {
+                mass: 1.0,
                 position: offset
                     + glam::vec2(x as f32 * dx, (y as f32 + 0.5 * (5 - x) as f32) * dy),
                 velocity: glam::vec2(0.0, 0.0),
