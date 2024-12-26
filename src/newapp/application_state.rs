@@ -1,3 +1,4 @@
+use image::GenericImageView;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::KeyEvent,
@@ -78,5 +79,13 @@ impl ApplicationState {
 
     pub fn on_user_event(&mut self, event: &Event) {
         self.renderer.on_event(event);
+    }
+
+    pub fn on_file_dropped(&mut self, path: std::path::PathBuf) {
+        println!("on file dropped {path:?}");
+        let img = image::open(path).expect("Failed to load image");
+        let (width, height) = img.dimensions();
+        println!("width: {width}, height: {height}");
+        self.simulation.on_image_loaded(img);
     }
 }

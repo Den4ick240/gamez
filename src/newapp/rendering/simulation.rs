@@ -20,7 +20,24 @@ impl Instance {
         const ATTRS: [wgpu::VertexAttribute; 3] =
             wgpu::vertex_attr_array![1 => Float32x2, 2 => Float32, 3 => Float32x3];
         wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &ATTRS,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Pod, Zeroable)]
+struct ColorInstance {
+    pub color: glam::Vec3,
+}
+
+impl ColorInstance {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![4 => Float32x3];
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &ATTRS,
         }
@@ -30,16 +47,28 @@ impl Instance {
 pub struct SimulationRenderer {
     pipeline: wgpu::RenderPipeline,
     instance_buffer: wgpu::Buffer,
+    color_instance_buffer: wgpu::Buffer,
 }
 
-const MAX_PARTICLES: u64 = 20000;
+const MAX_PARTICLES: u64 = 40000;
 
+fn get_particle_buffer_size2() -> wgpu::BufferAddress {
+    round_buffer_size(
+        (MAX_PARTICLES as usize * mem::size_of::<ColorInstance>()) as wgpu::BufferAddress,
+    )
+}
 fn get_particle_buffer_size() -> wgpu::BufferAddress {
     round_buffer_size((MAX_PARTICLES as usize * mem::size_of::<Instance>()) as wgpu::BufferAddress)
 }
 
 impl SimulationRenderer {
     pub fn new(context: &RenderingContext, shader_module: &wgpu::ShaderModule) -> Self {
+        let color_instance_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SimulationColorInstanceBuffer"),
+            size: get_particle_buffer_size2(),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let instance_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("SimulationInstanceBuffer"),
             size: get_particle_buffer_size(),
@@ -50,6 +79,7 @@ impl SimulationRenderer {
         Self {
             pipeline,
             instance_buffer,
+            color_instance_buffer,
         }
     }
 
@@ -77,10 +107,23 @@ impl SimulationRenderer {
                 color: it.color,
             })
             .collect::<Vec<_>>();
+        let colors = simulation
+            .get_colors()
+            .iter()
+            .map(|it| ColorInstance {
+                color: glam::vec3(it.r, it.g, it.b),
+            })
+            .collect::<Vec<_>>();
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&particles));
+        queue.write_buffer(
+            &self.color_instance_buffer,
+            0,
+            bytemuck::cast_slice(&colors),
+        );
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_vertex_buffer(0, square_mesh.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        render_pass.set_vertex_buffer(2, self.color_instance_buffer.slice(..));
         render_pass.draw(0..4, 0..particles.len() as u32);
     }
 }
@@ -103,7 +146,7 @@ fn create_pipeline(
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                buffers: &[SquareMesh::desc(), Instance::desc()],
+                buffers: &[SquareMesh::desc(), Instance::desc(), ColorInstance::desc()],
                 entry_point: Some("vs_simulation"),
                 compilation_options: Default::default(),
             },

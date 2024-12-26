@@ -123,6 +123,7 @@ impl ApplicationHandler<Event> for Application {
                 button,
             } => self.get_state().on_mouse_input(state, button),
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::DroppedFile(path) => self.get_state().on_file_dropped(path),
             _ => (),
         }
     }

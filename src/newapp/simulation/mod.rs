@@ -1,6 +1,15 @@
-use std::{collections::vec_deque::Iter, env::current_dir, f32::consts::PI, mem};
+use std::{
+    collections::vec_deque::Iter,
+    env::current_dir,
+    f32::consts::PI,
+    fs::{File, OpenOptions},
+    mem,
+};
 
+use image::{GenericImage, GenericImageView, Pixel};
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
+use std::io::{self, Read, Write};
 
 pub struct Particle {
     pub position: glam::Vec2,
@@ -10,8 +19,8 @@ pub struct Particle {
     pub color: glam::Vec3,
 }
 
-const BOUND_RADIUS: f32 = 50.0;
-const MAX_PARTICLE_RADIUS: f32 = 0.5;
+const BOUND_RADIUS: f32 = 80.0;
+const MAX_PARTICLE_RADIUS: f32 = 0.50;
 
 struct SpatialHash {
     grid_origin: glam::Vec2,
@@ -21,6 +30,13 @@ struct SpatialHash {
 
     indexes: Vec<usize>,
     pointers: Vec<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Color {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
 }
 
 #[derive(Debug)]
@@ -100,6 +116,7 @@ pub struct Simulation {
     updates: u64,
     rng: StdRng,
     spatial_hash: SpatialHash,
+    colors: Vec<Color>,
 }
 
 impl Simulation {
@@ -109,13 +126,17 @@ impl Simulation {
             0, 0, 0, 0, 0, 0,
         ];
         let mut rng: StdRng = SeedableRng::from_seed(seed);
-        let particles = vec![Particle {
-            position: glam::vec2(0.0, 0.0),
-            previous_position: glam::vec2(0.0, 0.0),
-            radius: rng.get_random_size(),
-            velocity: glam::Vec2::ZERO,
-            color: rng.get_random_color(),
-        }];
+        let particles = vec![];
+        let colors = load_vector_from_file("colors.bin")
+            .unwrap()
+            .unwrap_or(vec![]);
+        // let particles = vec![Particle {
+        //     position: glam::vec2(0.0, 0.0),
+        //     previous_position: glam::vec2(0.0, 0.0),
+        //     radius: rng.get_random_size(),
+        //     velocity: glam::Vec2::ZERO,
+        //     color: rng.get_random_color(),
+        // }];
         let cell_size = MAX_PARTICLE_RADIUS * 2.0;
         Self {
             particles,
@@ -127,16 +148,21 @@ impl Simulation {
                 (BOUND_RADIUS * 2.0 / cell_size) as u32,
                 (BOUND_RADIUS * 2.0 / cell_size) as u32,
             ),
+            colors,
         }
     }
 
     pub fn on_mouse_move(&mut self, position: glam::Vec2) {
-        self.particles[0].position = position;
-        self.particles[0].velocity = glam::Vec2::ZERO;
+        // self.particles[0].position = position;
+        // self.particles[0].velocity = glam::Vec2::ZERO;
     }
 
     pub fn get_particles(&self) -> &Vec<Particle> {
         &self.particles
+    }
+
+    pub fn get_colors(&self) -> &Vec<Color> {
+        &self.colors
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -155,17 +181,23 @@ impl Simulation {
 
             for particle in &mut self.particles {
                 particle.velocity = (particle.position - particle.previous_position) / dt;
+                let damp = 100.0 / particle.velocity.length();
+                if damp < 1.0 {
+                    particle.velocity *= damp;
+                }
             }
         }
         self.updates += 1;
     }
 
     fn spawn(&mut self) {
-        if self.particles.len() < 14750 && self.updates % 4 == 0 {
+        let count = 38900;
+        // let count = 20;
+        if self.particles.len() < count && self.updates % 4 == 0 {
             let velocity =
                 glam::Vec2::from_angle(f32::sin(self.updates as f32 / 40.0) * PI * 0.125) * 40.0;
             let offset = velocity.perp().normalize();
-            for i in 0..25 {
+            for i in 0..45 {
                 self.particles.push(Particle {
                     position: glam::vec2(-30.0, 20.0) + offset * i as f32,
                     previous_position: glam::Vec2::ZERO,
@@ -173,12 +205,19 @@ impl Simulation {
                     velocity,
                     color: self.rng.get_random_color(),
                 });
+                if self.particles.len() > self.colors.len() {
+                    self.colors.push(Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                    });
+                }
             }
         }
     }
 
     fn integrate(&mut self, dt: f32) {
-        let gravity = glam::vec2(-6.0, -9.81);
+        let gravity = glam::vec2(-6.0, -9.81) * 2.0;
         // let gravity = glam::Vec2::ZERO;
         for particle in &mut self.particles {
             particle.previous_position = particle.position;
@@ -210,82 +249,128 @@ impl Simulation {
     }
 
     fn apply_distance_constraints(&mut self, dt: f32) {
-        // for y in 0..(self.spatial_hash.height) {
-        //     for x in 0..(self.spatial_hash.width) {
-        //         let indicies = self.spatial_hash.get_indexes_by_cell(x, y);
-        //         let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
-        //             .into_iter()
-        //             .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
-        //             .flat_map(|(xx, yy)| self.spatial_hash.get_indexes_by_cell(xx, yy));
-        //         for (i, first_index) in indicies.iter().enumerate() {
-        //             for second_index in indicies.iter().skip(i + 1).chain(other_indicies.clone()) {
-        //                 let (maxi, mini) = if second_index > first_index {
-        //                     (second_index, first_index)
-        //                 } else {
-        //                     (first_index, second_index)
-        //                 };
-        //                 let (head, tail) = self.particles.split_at_mut(*maxi);
-        //                 let first = &mut head[*mini];
-        //                 let second = &mut tail[0];
-        //                 apply_distance_constraint(first, second, dt);
-        //             }
-        //         }
-        //     }
-        // }
-        for i in 0..self.particles.len() {
-            //can't be empty since we only enter the loop if len > 0
-            let (first, others) = self.particles[i..].split_first_mut().unwrap();
-            let cell_coords = self.spatial_hash.get_cell_coords(&first.position);
-            let cells = [
-                CellCoords {
-                    x: cell_coords.x,
-                    y: cell_coords.y,
-                },
-                CellCoords {
-                    x: cell_coords.x,
-                    y: cell_coords.y + 1,
-                },
-                CellCoords {
-                    x: cell_coords.x,
-                    y: (cell_coords.y as i32 - 1) as u32,
-                },
-                CellCoords {
-                    x: cell_coords.x + 1,
-                    y: cell_coords.y,
-                },
-                CellCoords {
-                    x: cell_coords.x + 1,
-                    y: cell_coords.y + 1,
-                },
-                CellCoords {
-                    x: cell_coords.x + 1,
-                    y: (cell_coords.y as i32 - 1) as u32,
-                },
-                CellCoords {
-                    x: (cell_coords.x as i32 - 1) as u32,
-                    y: cell_coords.y,
-                },
-                CellCoords {
-                    x: (cell_coords.x as i32 - 1) as u32,
-                    y: cell_coords.y + 1,
-                },
-                CellCoords {
-                    x: (cell_coords.x as i32 - 1) as u32,
-                    y: (cell_coords.y as i32 - 1) as u32,
-                },
-            ];
-
-            let indicies = cells
-                .iter()
-                .map(|coords| self.spatial_hash.get_indexes_by_cell(coords.x, coords.y))
-                .flatten()
-                .filter(|&&index| index > i);
-
-            for j in indicies {
-                let second = &mut others[j - i - 1];
-                apply_distance_constraint(first, second, dt);
+        for y in 0..(self.spatial_hash.height) {
+            for x in 0..(self.spatial_hash.width) {
+                let indicies = self.spatial_hash.get_indexes_by_cell(x, y);
+                let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
+                    .into_iter()
+                    .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
+                    .flat_map(|(xx, yy)| self.spatial_hash.get_indexes_by_cell(xx, yy));
+                for (i, first_index) in indicies.iter().enumerate() {
+                    for second_index in indicies.iter().skip(i + 1).chain(other_indicies.clone()) {
+                        let (maxi, mini) = if second_index > first_index {
+                            (second_index, first_index)
+                        } else {
+                            (first_index, second_index)
+                        };
+                        let (head, tail) = self.particles.split_at_mut(*maxi);
+                        let first = &mut head[*mini];
+                        let second = &mut tail[0];
+                        apply_distance_constraint(first, second, dt);
+                    }
+                }
             }
         }
+        //     for i in 0..self.particles.len() {
+        //         //can't be empty since we only enter the loop if len > 0
+        //         let (first, others) = self.particles[i..].split_first_mut().unwrap();
+        //         let cell_coords = self.spatial_hash.get_cell_coords(&first.position);
+        //         let cells = [
+        //             CellCoords {
+        //                 x: cell_coords.x,
+        //                 y: cell_coords.y,
+        //             },
+        //             CellCoords {
+        //                 x: cell_coords.x,
+        //                 y: cell_coords.y + 1,
+        //             },
+        //             CellCoords {
+        //                 x: cell_coords.x,
+        //                 y: (cell_coords.y as i32 - 1) as u32,
+        //             },
+        //             CellCoords {
+        //                 x: cell_coords.x + 1,
+        //                 y: cell_coords.y,
+        //             },
+        //             CellCoords {
+        //                 x: cell_coords.x + 1,
+        //                 y: cell_coords.y + 1,
+        //             },
+        //             CellCoords {
+        //                 x: cell_coords.x + 1,
+        //                 y: (cell_coords.y as i32 - 1) as u32,
+        //             },
+        //             CellCoords {
+        //                 x: (cell_coords.x as i32 - 1) as u32,
+        //                 y: cell_coords.y,
+        //             },
+        //             CellCoords {
+        //                 x: (cell_coords.x as i32 - 1) as u32,
+        //                 y: cell_coords.y + 1,
+        //             },
+        //             CellCoords {
+        //                 x: (cell_coords.x as i32 - 1) as u32,
+        //                 y: (cell_coords.y as i32 - 1) as u32,
+        //             },
+        //         ];
+        //
+        //         let indicies = cells
+        //             .iter()
+        //             .map(|coords| self.spatial_hash.get_indexes_by_cell(coords.x, coords.y))
+        //             .flatten()
+        //             .filter(|&&index| index > i);
+        //
+        //         for j in indicies {
+        //             let second = &mut others[j - i - 1];
+        //             apply_distance_constraint(first, second, dt);
+        //         }
+        //     }
+    }
+
+    pub fn on_image_loaded(&mut self, img: image::DynamicImage) {
+        let (width, height) = img.dimensions();
+        let width = width as f32;
+        let height = height as f32;
+        let dim = width.max(height) as f32;
+        let offset = glam::vec2(
+            ((dim - width as f32) / 2.0).min(0.0),
+            ((dim - height as f32) / 2.0).min(0.0),
+        );
+        for i in 0..self.particles.len() {
+            let particle = &self.particles[i];
+            let pos = (glam::vec2(particle.position.x, -particle.position.y)
+                + glam::vec2(BOUND_RADIUS, BOUND_RADIUS))
+                * dim
+                / (BOUND_RADIUS * 2.0);
+            if pos.x < offset.x
+                || pos.x > offset.x + width
+                || pos.y < offset.y
+                || pos.y > offset.y + height
+            {
+                self.colors[i] = Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                };
+            } else {
+                let pos = pos - offset;
+                let color = img.get_pixel(pos.x as u32, pos.y as u32);
+                let (r, g, b, _) = color.channels4();
+                let color = Color {
+                    r: r as f32 / 255.0,
+                    g: g as f32 / 255.0,
+                    b: b as f32 / 255.0,
+                };
+                self.colors[i] = color;
+            }
+        }
+        save_vector_to_file(&self.colors, "colors.bin").unwrap();
+    }
+}
+
+impl Default for Simulation {
+    fn default() -> Self {
+        Self::new()
     }
 }
 fn apply_distance_constraint(first: &mut Particle, second: &mut Particle, dt: f32) {
@@ -329,5 +414,32 @@ impl MyRng for StdRng {
         ];
 
         colors[self.gen_range(0..colors.len())]
+    }
+}
+
+fn save_vector_to_file(vec: &Vec<Color>, file_path: &str) -> io::Result<()> {
+    // Open or create the file
+    let mut file = File::create(file_path)?;
+
+    // Serialize the vector using bincode and write to the file
+    let encoded: Vec<u8> = bincode::serialize(vec).unwrap();
+    file.write_all(&encoded)?;
+
+    Ok(())
+}
+
+fn load_vector_from_file(file_path: &str) -> io::Result<Option<Vec<Color>>> {
+    // Check if file exists
+    if let Ok(mut file) = OpenOptions::new().read(true).open(file_path) {
+        // Read the file contents
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+
+        // Deserialize the data
+        let vec: Vec<Color> = bincode::deserialize(&buffer).unwrap();
+        Ok(Some(vec))
+    } else {
+        // File doesn't exist, return None
+        Ok(None)
     }
 }
