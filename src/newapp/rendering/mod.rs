@@ -162,7 +162,7 @@ impl Renderer {
         self.camera_uniform.on_resize(&self.context.queue, &size);
     }
 
-    pub fn render(&mut self, simulation: &Simulation, _: f64, _: T) {
+    pub fn render(&mut self, simulation: &mut Simulation, _: f64, _: T) {
         let surface_texture = self
             .surface
             .get_current_texture()
@@ -203,7 +203,7 @@ impl Renderer {
                 &mut render_pass,
                 &self.context.queue,
                 &self.square_mesh,
-                &simulation,
+                simulation,
             );
         }
 

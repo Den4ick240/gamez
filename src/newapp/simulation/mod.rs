@@ -1,12 +1,9 @@
 use std::{
-    collections::vec_deque::Iter,
-    env::current_dir,
     f32::consts::PI,
     fs::{File, OpenOptions},
-    mem,
 };
 
-use image::{GenericImage, GenericImageView, Pixel};
+use image::{GenericImageView, Pixel};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
@@ -16,7 +13,6 @@ pub struct Particle {
     pub previous_position: glam::Vec2,
     pub velocity: glam::Vec2,
     pub radius: f32,
-    pub color: glam::Vec3,
 }
 
 const BOUND_RADIUS: f32 = 80.0;
@@ -32,7 +28,7 @@ struct SpatialHash {
     pointers: Vec<usize>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Color {
     pub r: f32,
     pub g: f32,
@@ -117,6 +113,7 @@ pub struct Simulation {
     rng: StdRng,
     spatial_hash: SpatialHash,
     colors: Vec<Color>,
+    colors_changed: bool,
 }
 
 impl Simulation {
@@ -125,18 +122,11 @@ impl Simulation {
             1u8, 2u8, 3u8, 4u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0,
         ];
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let rng: StdRng = SeedableRng::from_seed(seed);
         let particles = vec![];
         let colors = load_vector_from_file("colors.bin")
             .unwrap()
             .unwrap_or(vec![]);
-        // let particles = vec![Particle {
-        //     position: glam::vec2(0.0, 0.0),
-        //     previous_position: glam::vec2(0.0, 0.0),
-        //     radius: rng.get_random_size(),
-        //     velocity: glam::Vec2::ZERO,
-        //     color: rng.get_random_color(),
-        // }];
         let cell_size = MAX_PARTICLE_RADIUS * 2.0;
         Self {
             particles,
@@ -149,29 +139,29 @@ impl Simulation {
                 (BOUND_RADIUS * 2.0 / cell_size) as u32,
             ),
             colors,
+            colors_changed: true,
         }
     }
 
-    pub fn on_mouse_move(&mut self, position: glam::Vec2) {
-        // self.particles[0].position = position;
-        // self.particles[0].velocity = glam::Vec2::ZERO;
-    }
+    pub fn on_mouse_move(&mut self, _position: glam::Vec2) {}
 
     pub fn get_particles(&self) -> &Vec<Particle> {
         &self.particles
     }
 
-    pub fn get_colors(&self) -> &Vec<Color> {
-        &self.colors
+    pub fn get_colors(&mut self) -> Option<&Vec<Color>> {
+        if self.colors_changed {
+            self.colors_changed = false;
+            Some(&self.colors)
+        } else {
+            None
+        }
     }
 
     pub fn update(&mut self, dt: f32) {
         self.spawn();
         let steps = 8;
         let dt = dt / steps as f32;
-        // dbg!(self
-        //     .spatial_hash
-        //     .get_cell_coords(&self.particles[0].position));
         self.spatial_hash
             .build(self.particles.iter().map(|it| &it.position));
         for _ in 0..steps {
@@ -181,7 +171,7 @@ impl Simulation {
 
             for particle in &mut self.particles {
                 particle.velocity = (particle.position - particle.previous_position) / dt;
-                let damp = 100.0 / particle.velocity.length();
+                let damp = 80.0 / particle.velocity.length();
                 if damp < 1.0 {
                     particle.velocity *= damp;
                 }
@@ -192,32 +182,33 @@ impl Simulation {
 
     fn spawn(&mut self) {
         let count = 38900;
-        // let count = 20;
         if self.particles.len() < count && self.updates % 4 == 0 {
             let velocity =
-                glam::Vec2::from_angle(f32::sin(self.updates as f32 / 40.0) * PI * 0.125) * 40.0;
+                glam::Vec2::from_angle(f32::sin(self.updates as f32 / 40.0) * PI * 0.125) * 80.0;
             let offset = velocity.perp().normalize();
             for i in 0..45 {
                 self.particles.push(Particle {
-                    position: glam::vec2(-30.0, 20.0) + offset * i as f32,
+                    position: glam::vec2(-5.0, -55.0) + offset * i as f32,
                     previous_position: glam::Vec2::ZERO,
                     radius: self.rng.get_random_size(),
                     velocity,
-                    color: self.rng.get_random_color(),
                 });
                 if self.particles.len() > self.colors.len() {
-                    self.colors.push(Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                    });
+                    self.colors_changed = true;
+                    self.colors.push(self.rng.get_random_color());
                 }
             }
         }
     }
 
     fn integrate(&mut self, dt: f32) {
-        let gravity = glam::vec2(-6.0, -9.81) * 2.0;
+        let len = self.particles.len();
+        let gravity = glam::vec2(-6.0, -9.81)
+            * if len < 14000 || len > 20000 && len < 29000 {
+                -1.0
+            } else {
+                1.0
+            };
         // let gravity = glam::Vec2::ZERO;
         for particle in &mut self.particles {
             particle.previous_position = particle.position;
@@ -226,7 +217,7 @@ impl Simulation {
         }
     }
 
-    fn apply_box_constraint(&mut self, dt: f32) {
+    fn apply_box_constraint(&mut self, _dt: f32) {
         let box_size = BOUND_RADIUS;
         for particle in &mut self.particles {
             if particle.position.y - particle.radius < -box_size {
@@ -365,6 +356,7 @@ impl Simulation {
             }
         }
         save_vector_to_file(&self.colors, "colors.bin").unwrap();
+        self.colors_changed = true;
     }
 }
 
@@ -389,7 +381,7 @@ fn apply_distance_constraint(first: &mut Particle, second: &mut Particle, dt: f3
 trait MyRng {
     fn get_random_size(&mut self) -> f32;
 
-    fn get_random_color(&mut self) -> glam::Vec3;
+    fn get_random_color(&mut self) -> Color;
 }
 
 impl MyRng for StdRng {
@@ -397,20 +389,68 @@ impl MyRng for StdRng {
         self.gen_range(0.7..=1.0) * MAX_PARTICLE_RADIUS
     }
 
-    fn get_random_color(&mut self) -> glam::Vec3 {
+    fn get_random_color(&mut self) -> Color {
         let colors = [
-            glam::vec3(0.945, 0.769, 0.058), // Vibrant Yellow
-            glam::vec3(0.204, 0.596, 0.859), // Sky Blue
-            glam::vec3(0.608, 0.349, 0.714), // Soft Purple
-            glam::vec3(0.231, 0.764, 0.392), // Fresh Green
-            glam::vec3(0.937, 0.325, 0.314), // Coral Red
-            glam::vec3(0.180, 0.800, 0.443), // Mint Green
-            glam::vec3(0.996, 0.780, 0.345), // Soft Orange
-            glam::vec3(0.556, 0.267, 0.678), // Deep Violet
-            glam::vec3(0.870, 0.490, 0.847), // Lavender Pink
-            glam::vec3(0.529, 0.808, 0.922), // Light Blue
-            glam::vec3(0.996, 0.921, 0.545), // Pa.s.tel Yellow
-            glam::vec3(0.835, 0.625, 0.459), // Warm Beige
+            Color {
+                r: 0.945,
+                g: 0.769,
+                b: 0.058,
+            }, // Vibrant Yellow
+            Color {
+                r: 0.204,
+                g: 0.596,
+                b: 0.859,
+            }, // Sky Blue
+            Color {
+                r: 0.608,
+                g: 0.349,
+                b: 0.714,
+            }, // Soft Purple
+            Color {
+                r: 0.231,
+                g: 0.764,
+                b: 0.392,
+            }, // Fresh Green
+            Color {
+                r: 0.937,
+                g: 0.325,
+                b: 0.314,
+            }, // Coral Red
+            Color {
+                r: 0.180,
+                g: 0.800,
+                b: 0.443,
+            }, // Mint Green
+            Color {
+                r: 0.996,
+                g: 0.780,
+                b: 0.345,
+            }, // Soft Orange
+            Color {
+                r: 0.556,
+                g: 0.267,
+                b: 0.678,
+            }, // Deep Violet
+            Color {
+                r: 0.870,
+                g: 0.490,
+                b: 0.847,
+            }, // Lavender Pink
+            Color {
+                r: 0.529,
+                g: 0.808,
+                b: 0.922,
+            }, // Light Blue
+            Color {
+                r: 0.996,
+                g: 0.921,
+                b: 0.545,
+            }, // Pa.s.tel Yellow
+            Color {
+                r: 0.835,
+                g: 0.625,
+                b: 0.459,
+            }, // Warm Beige
         ];
 
         colors[self.gen_range(0..colors.len())]
@@ -418,28 +458,19 @@ impl MyRng for StdRng {
 }
 
 fn save_vector_to_file(vec: &Vec<Color>, file_path: &str) -> io::Result<()> {
-    // Open or create the file
     let mut file = File::create(file_path)?;
-
-    // Serialize the vector using bincode and write to the file
     let encoded: Vec<u8> = bincode::serialize(vec).unwrap();
     file.write_all(&encoded)?;
-
     Ok(())
 }
 
 fn load_vector_from_file(file_path: &str) -> io::Result<Option<Vec<Color>>> {
-    // Check if file exists
     if let Ok(mut file) = OpenOptions::new().read(true).open(file_path) {
-        // Read the file contents
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)?;
-
-        // Deserialize the data
         let vec: Vec<Color> = bincode::deserialize(&buffer).unwrap();
         Ok(Some(vec))
     } else {
-        // File doesn't exist, return None
         Ok(None)
     }
 }

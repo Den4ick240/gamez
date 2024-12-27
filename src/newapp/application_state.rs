@@ -39,7 +39,7 @@ impl ApplicationState {
     }
 
     pub fn render(&mut self, blend: f64, dt: T) {
-        self.renderer.render(&self.simulation, blend, dt);
+        self.renderer.render(&mut self.simulation, blend, dt);
     }
 
     pub fn before_fixed_updates(&mut self) {}

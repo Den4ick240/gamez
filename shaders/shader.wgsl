@@ -13,11 +13,10 @@ struct Input {
 struct InstanceInput {
   @location(1) position: vec2<f32>,
   @location(2) radius: f32,
-  @location(3) color: vec3<f32>,
 }
 
 struct ColorInput {
-  @location(4) color: vec3<f32>,
+  @location(3) color: vec3<f32>,
 }
 
 struct Output {

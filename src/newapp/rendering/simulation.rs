@@ -3,7 +3,7 @@ use std::mem;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-use crate::newapp::simulation::Simulation;
+use crate::newapp::simulation::{self, Simulation};
 
 use super::{square_mesh::SquareMesh, wgpu_utils::round_buffer_size, RenderingContext};
 
@@ -12,13 +12,13 @@ use super::{square_mesh::SquareMesh, wgpu_utils::round_buffer_size, RenderingCon
 struct Instance {
     pub position: glam::Vec2,
     pub radius: f32,
-    pub color: glam::Vec3,
+    pub _padding: f32,
 }
 
 impl Instance {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRS: [wgpu::VertexAttribute; 3] =
-            wgpu::vertex_attr_array![1 => Float32x2, 2 => Float32, 3 => Float32x3];
+        const ATTRS: [wgpu::VertexAttribute; 2] =
+            wgpu::vertex_attr_array![1 => Float32x2, 2 => Float32];
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -31,11 +31,12 @@ impl Instance {
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct ColorInstance {
     pub color: glam::Vec3,
+    pub _padding: f32,
 }
 
 impl ColorInstance {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![4 => Float32x3];
+        const ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![3 => Float32x3];
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -96,7 +97,7 @@ impl SimulationRenderer {
         render_pass: &mut wgpu::RenderPass,
         queue: &wgpu::Queue,
         square_mesh: &SquareMesh,
-        simulation: &Simulation,
+        simulation: &mut Simulation,
     ) {
         let particles = simulation
             .get_particles()
@@ -104,22 +105,24 @@ impl SimulationRenderer {
             .map(|it| Instance {
                 position: it.position,
                 radius: it.radius,
-                color: it.color,
+                _padding: 0.0,
             })
             .collect::<Vec<_>>();
-        let colors = simulation
-            .get_colors()
-            .iter()
-            .map(|it| ColorInstance {
-                color: glam::vec3(it.r, it.g, it.b),
-            })
-            .collect::<Vec<_>>();
+        if let Some(colors) = simulation.get_colors() {
+            let colors = colors
+                .iter()
+                .map(|it| ColorInstance {
+                    color: glam::vec3(it.r, it.g, it.b),
+                    _padding: 0.0,
+                })
+                .collect::<Vec<_>>();
+            queue.write_buffer(
+                &self.color_instance_buffer,
+                0,
+                bytemuck::cast_slice(&colors),
+            )
+        }
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&particles));
-        queue.write_buffer(
-            &self.color_instance_buffer,
-            0,
-            bytemuck::cast_slice(&colors),
-        );
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_vertex_buffer(0, square_mesh.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
