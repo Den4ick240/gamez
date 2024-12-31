@@ -231,7 +231,7 @@ impl Simulation {
     fn spawn(&mut self) {
         // let count = 8900;
         // let count = 35200; //175
-        let count = 46200;
+        let count = 60000;
         if self.particles.len() < count && self.updates % 5 == 0 {
             let velocity =
                 // glam::Vec2::from_angle(f32::sin(self.updates as f32 / 40.0) * PI * 0.125) * 80.0;
@@ -336,7 +336,7 @@ impl Simulation {
     }
 
     fn apply_stagger_threads(&mut self, dt: f32) {
-        const N: usize = 6;
+        const N: usize = 5;
         let width = self.spatial_hash.width;
         let height = self.spatial_hash.height;
         let chunk_size = height as usize / N;
@@ -346,10 +346,9 @@ impl Simulation {
 
         let barrier = Barrier::new(N);
         rayon::scope(|s| {
-            for n in 0..N {
+            for n in 0..(N - 1) {
                 let start = n * chunk_size;
                 let end = (start + chunk_size) as u32;
-                let end = if n == N - 1 { height } else { end };
                 let start1 = if start % 2 == 0 { start } else { start + 1 } as u32;
                 let start2 = if start % 2 == 0 { start + 1 } else { start } as u32;
                 // println!("Start1 {start1} start2: {start2}, end: {end}");
@@ -398,6 +397,55 @@ impl Simulation {
                         }
                     }
                 });
+            }
+
+            let start = (N - 1) * chunk_size;
+            let end = height;
+            let start1 = if start % 2 == 0 { start } else { start + 1 } as u32;
+            let start2 = if start % 2 == 0 { start + 1 } else { start } as u32;
+            // println!("Start1 {start1} start2: {start2}, end: {end}");
+            let spatial_hash = &self.spatial_hash;
+            let barrier = &barrier;
+            for y in (start1..end).step_by(2) {
+                for x in 0..width {
+                    let indicies = spatial_hash.get_indexes_by_cell(x, y);
+                    let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
+                        .into_iter()
+                        .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
+                        .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(xx, yy));
+
+                    for (i, first_index) in indicies.iter().enumerate() {
+                        for second_index in
+                            indicies.iter().skip(i + 1).chain(other_indicies.clone())
+                        {
+                            let data_ptr = data_ptr as *mut Particle;
+                            let first = unsafe { &mut *(data_ptr.add(*first_index)) };
+                            let second = unsafe { &mut *(data_ptr.add(*second_index)) };
+                            apply_distance_constraint(first, second, dt);
+                        }
+                    }
+                }
+            }
+            barrier.wait();
+            for y in (start2..end).step_by(2) {
+                for x in 0..width {
+                    let indicies = spatial_hash.get_indexes_by_cell(x, y);
+                    let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
+                        .into_iter()
+                        .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
+                        .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(xx, yy));
+
+                    for (i, first_index) in indicies.iter().enumerate() {
+                        for second_index in
+                            indicies.iter().skip(i + 1).chain(other_indicies.clone())
+                        {
+                            let data_ptr = data_ptr as *mut Particle;
+                            let first = unsafe { &mut *(data_ptr.add(*first_index)) };
+                            let second = unsafe { &mut *(data_ptr.add(*second_index)) };
+                            apply_distance_constraint(first, second, dt);
+                        }
+                    }
+                }
             }
         });
     }
@@ -557,7 +605,7 @@ trait MyRng {
 
 impl MyRng for StdRng {
     fn get_random_size(&mut self) -> f32 {
-        self.gen_range(1.0..=1.0) * MAX_PARTICLE_RADIUS
+        self.gen_range(0.7..=1.0) * MAX_PARTICLE_RADIUS
     }
 
     fn get_random_color(&mut self) -> Color {
