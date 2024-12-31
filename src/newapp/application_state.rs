@@ -1,7 +1,7 @@
 use image::GenericImageView;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
-    event::KeyEvent,
+    event::{ElementState, KeyEvent},
     event_loop::EventLoopProxy,
     keyboard::{KeyCode, PhysicalKey},
 };
@@ -53,10 +53,19 @@ impl ApplicationState {
     pub fn update(&mut self, _: T) {}
 
     pub fn on_keyboard_input(&mut self, event: KeyEvent) {
-        match event.physical_key {
-            PhysicalKey::Code(code) => self.on_physical_key(code),
+        match event {
+            KeyEvent {
+                physical_key: PhysicalKey::Code(KeyCode::KeyC),
+                repeat: false,
+                state: ElementState::Pressed,
+                ..
+            } => self.simulation.toggle_collision_detection_mode(),
+            KeyEvent {
+                physical_key: PhysicalKey::Code(code),
+                ..
+            } => self.on_physical_key(code),
             _ => (),
-        };
+        }
     }
 
     fn on_physical_key(&mut self, code: KeyCode) {

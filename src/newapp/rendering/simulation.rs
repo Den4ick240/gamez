@@ -12,7 +12,6 @@ use super::{square_mesh::SquareMesh, wgpu_utils::round_buffer_size, RenderingCon
 struct Instance {
     pub position: glam::Vec2,
     pub radius: f32,
-    pub _padding: f32,
 }
 
 impl Instance {
@@ -51,7 +50,7 @@ pub struct SimulationRenderer {
     color_instance_buffer: wgpu::Buffer,
 }
 
-const MAX_PARTICLES: u64 = 40000;
+const MAX_PARTICLES: u64 = 60000;
 
 fn get_particle_buffer_size2() -> wgpu::BufferAddress {
     round_buffer_size(
@@ -105,7 +104,6 @@ impl SimulationRenderer {
             .map(|it| Instance {
                 position: it.position,
                 radius: it.radius,
-                _padding: 0.0,
             })
             .collect::<Vec<_>>();
         if let Some(colors) = simulation.get_colors() {
