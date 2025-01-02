@@ -50,7 +50,7 @@ pub struct SimulationRenderer {
     color_instance_buffer: wgpu::Buffer,
 }
 
-const MAX_PARTICLES: u64 = 60000;
+const MAX_PARTICLES: u64 = 181000;
 
 fn get_particle_buffer_size2() -> wgpu::BufferAddress {
     round_buffer_size(

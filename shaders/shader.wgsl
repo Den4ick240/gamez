@@ -27,7 +27,7 @@ struct Output {
 }
 
 fn to_camera_pos(world_pos: vec2<f32>) -> vec2<f32> {
-    var radius = 400.0;
+    var radius = 600.0;
     if camera.width < camera.height {
         return vec2<f32>(
             world_pos.x * 2 / radius,

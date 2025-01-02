@@ -30,7 +30,7 @@ pub struct Particle {
     pub radius: f32,
 }
 
-const BOUND_RADIUS: f32 = 200.0;
+const BOUND_RADIUS: f32 = 300.0;
 const MAX_PARTICLE_RADIUS: f32 = 1.0;
 
 #[derive(Debug)]
@@ -231,13 +231,13 @@ impl Simulation {
     fn spawn(&mut self) {
         // let count = 8900;
         // let count = 35200; //175
-        let count = 60000;
-        if self.particles.len() < count && self.updates % 5 == 0 {
+        let count = 108000;
+        if self.particles.len() < count && self.updates % 2 == 0 {
             let velocity =
-                // glam::Vec2::from_angle(f32::sin(self.updates as f32 / 40.0) * PI * 0.125) * 80.0;
-                vec2(30.0, 0.0);
+                glam::Vec2::from_angle(f32::sin(self.updates as f32 / 40.0) * PI * 0.125) * 80.0;
+            // vec2(30.0, 0.0);
             let offset = velocity.perp().normalize() * 2.0;
-            for i in 0..75 {
+            for i in 0..85 {
                 self.particles.push(Particle {
                     position: vec2(-170.0, 40.0) + offset * i as f32,
                     previous_position: Vec2::ZERO,
@@ -254,13 +254,13 @@ impl Simulation {
 
     fn integrate(&mut self, dt: f32) {
         let len = self.particles.len();
-        let gravity = vec2(0.0, -10.00);
-        // let gravity = glam::vec2(-6.0, -9.81)
-        //     * if len < 14000 || len > 20000 && len < 29000 {
-        //         -1.0
-        //     } else {
-        //         1.0
-        //     };
+        // let gravity = vec2(0.0, -30.00);
+        let gravity = glam::vec2(0.0, -30.81)
+            * if len < 34000 || len > 50000 && len < 69000 {
+                -1.0
+            } else {
+                1.0
+            };
         // let gravity = glam::Vec2::ZERO;
         for particle in &mut self.particles {
             particle.previous_position = particle.position;
@@ -605,7 +605,7 @@ trait MyRng {
 
 impl MyRng for StdRng {
     fn get_random_size(&mut self) -> f32 {
-        self.gen_range(0.7..=1.0) * MAX_PARTICLE_RADIUS
+        self.gen_range(1.0..=1.0) * MAX_PARTICLE_RADIUS
     }
 
     fn get_random_color(&mut self) -> Color {

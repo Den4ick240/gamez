@@ -47,10 +47,11 @@ impl Application {
     fn next_frame(&mut self) {
         let state = self.state.as_mut().unwrap();
         let new_time = Instant::now();
-        let frame_time = new_time
-            .duration_since(self.last_instant)
-            .as_secs_f64()
-            .min(self.max_fixed_dt);
+        let frame_time = new_time.duration_since(self.last_instant).as_secs_f64();
+        if frame_time > self.max_fixed_dt {
+            println!("Lagging")
+        }
+        let frame_time = frame_time.min(self.max_fixed_dt);
         self.last_instant = new_time;
         self.physics_lag += frame_time;
         state.before_fixed_updates();
