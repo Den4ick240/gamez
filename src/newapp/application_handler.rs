@@ -1,5 +1,3 @@
-use std::{string, sync::Arc, time::Instant};
-
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::EventLoopProxy};
 
 use super::application::Application;
@@ -26,9 +24,7 @@ impl ApplicationHandlerImpl {
 
 impl ApplicationHandler<Event> for ApplicationHandlerImpl {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let state = pollster::block_on(Application::new(event_loop, &self.proxy));
-
-        self.state = Some(state);
+        self.state = pollster::block_on(Application::new(event_loop, &self.proxy)).into();
     }
 
     fn window_event(
@@ -40,7 +36,7 @@ impl ApplicationHandler<Event> for ApplicationHandlerImpl {
         self.get_state().window_event(event_loop, event);
     }
 
-    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: Event) {
+    fn user_event(&mut self, _: &winit::event_loop::ActiveEventLoop, event: Event) {
         self.get_state().on_user_event(&event);
     }
 }

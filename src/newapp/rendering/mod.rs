@@ -8,7 +8,7 @@ use simulation::SimulationRenderer;
 use square_mesh::SquareMesh;
 use winit::{dpi::PhysicalSize, event_loop::EventLoopProxy};
 
-use super::{application::T, application_handler::Event, simulation::Simulation, watch_file};
+use super::{application_handler::Event, simulation::Simulation, watch_file};
 
 pub struct RenderingContext {
     device: wgpu::Device,
@@ -158,7 +158,7 @@ impl Renderer {
         self.camera_uniform.on_resize(&self.context.queue, size);
     }
 
-    pub fn render(&mut self, simulation: &mut Simulation, _: f64, _: T) {
+    pub fn render(&mut self, simulation: &mut Simulation, _: f64, _: f64) {
         let surface_texture = self
             .surface
             .get_current_texture()

@@ -9,23 +9,26 @@ use winit::{
     window::Window,
 };
 
-use super::{application_handler::Event, rendering::Renderer, simulation::Simulation, watch_file};
-
-pub type T = f64;
-type Time = Instant;
+use super::{
+    application_handler::Event,
+    profiler::{self, Profiler},
+    rendering::Renderer,
+    simulation::Simulation,
+    watch_file,
+};
 
 pub struct Application {
     renderer: Renderer,
     simulation: Simulation,
-
-    fixed_dt: T,
-    max_fixed_dt: T,
-    last_instant: Time,
-    physics_lag: T,
-
-    pub should_exit: bool,
+    should_exit: bool,
     window: Arc<Window>,
-    instance: wgpu::Instance,
+    profiler: Profiler,
+
+    fixed_dt: f64,
+    max_fixed_dt: f64,
+    last_instant: Instant,
+    physics_lag: f64,
+    frame_count: u32,
 }
 
 impl Application {
@@ -50,7 +53,8 @@ impl Application {
             .expect("Failed to create surface!");
         let renderer = Renderer::new(&instance, surface, size, proxy).await;
         Self {
-            instance: wgpu::Instance::new(wgpu::InstanceDescriptor::default()),
+            frame_count: 0,
+            profiler: Profiler::new(),
             renderer,
             should_exit: false,
             simulation: Simulation::new(),
@@ -98,6 +102,8 @@ impl Application {
     }
 
     pub fn next_frame(&mut self) {
+        self.profiler.start(profiler::Kind::Frame);
+
         let new_time = Instant::now();
         let frame_time = new_time.duration_since(self.last_instant).as_secs_f64();
         if frame_time > self.max_fixed_dt {
@@ -116,13 +122,19 @@ impl Application {
 
         let blend = self.physics_lag / self.fixed_dt;
         self.render(blend, frame_time);
+
+        self.profiler.end(profiler::Kind::Frame);
+        if self.frame_count % 30 == 0 {
+            self.profiler.display();
+        }
+        self.frame_count += 1;
     }
 
     pub fn on_resize(&mut self, size: PhysicalSize<u32>) {
         self.renderer.on_resize(size);
     }
 
-    pub fn render(&mut self, blend: f64, dt: T) {
+    pub fn render(&mut self, blend: f64, dt: f64) {
         self.renderer.render(&mut self.simulation, blend, dt);
     }
 
@@ -134,7 +146,7 @@ impl Application {
 
     pub fn after_fixed_updates(&mut self) {}
 
-    pub fn update(&mut self, _: T) {}
+    pub fn update(&mut self, _: f64) {}
 
     pub fn on_keyboard_input(&mut self, event: KeyEvent) {
         match event {
