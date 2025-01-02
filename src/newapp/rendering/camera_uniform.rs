@@ -14,7 +14,7 @@ pub struct CameraUniform {
 }
 
 impl CameraUniform {
-    pub fn new(device: &wgpu::Device, size: &PhysicalSize<u32>) -> Self {
+    pub fn new(device: &wgpu::Device, size: PhysicalSize<u32>) -> Self {
         let instance = Instance {
             width: size.width as f32,
             height: size.height as f32,
@@ -27,7 +27,7 @@ impl CameraUniform {
         Self { buffer }
     }
 
-    pub fn on_resize(&self, queue: &wgpu::Queue, size: &PhysicalSize<u32>) {
+    pub fn on_resize(&self, queue: &wgpu::Queue, size: PhysicalSize<u32>) {
         let instance = Instance {
             width: size.width as f32,
             height: size.height as f32,

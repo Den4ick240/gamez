@@ -12,8 +12,8 @@ mod newapp;
 // mod timer;
 // mod wgpu_utils;
 
-use newapp::application::Event;
-use winit::event_loop::{ControlFlow, EventLoop, EventLoopBuilder};
+use newapp::application_handler::Event;
+use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
     pollster::block_on(run())
@@ -25,7 +25,7 @@ async fn run() {
 
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = newapp::application::Application::new(proxy);
+    let mut app = newapp::application_handler::ApplicationHandlerImpl::new(proxy);
 
     event_loop.run_app(&mut app).expect("Failed to run app")
 }

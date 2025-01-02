@@ -3,7 +3,7 @@ use std::sync::mpsc;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use winit::event_loop::EventLoopProxy;
 
-use super::application::Event;
+use super::application_handler::Event;
 
 pub fn init(event_loop_proxy: &EventLoopProxy<Event>, file_path: &'static str) {
     let event_loop_proxy = event_loop_proxy.clone();

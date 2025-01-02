@@ -8,7 +8,7 @@ use simulation::SimulationRenderer;
 use square_mesh::SquareMesh;
 use winit::{dpi::PhysicalSize, event_loop::EventLoopProxy};
 
-use super::{application::Event, application_state::T, simulation::Simulation, watch_file};
+use super::{application::T, application_handler::Event, simulation::Simulation, watch_file};
 
 pub struct RenderingContext {
     device: wgpu::Device,
@@ -33,7 +33,7 @@ impl Renderer {
     pub async fn new(
         instance: &wgpu::Instance,
         surface: wgpu::Surface<'static>,
-        size: &PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
         proxy: &EventLoopProxy<Event>,
     ) -> Self {
         watch_file::init(proxy, SHADER_FILE);
@@ -155,7 +155,7 @@ impl Renderer {
         self.context.surface_config.height = size.height;
         self.surface
             .configure(&self.context.device, &self.context.surface_config);
-        self.camera_uniform.on_resize(&self.context.queue, &size);
+        self.camera_uniform.on_resize(&self.context.queue, size);
     }
 
     pub fn render(&mut self, simulation: &mut Simulation, _: f64, _: T) {
