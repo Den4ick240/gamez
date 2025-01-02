@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use image::GenericImageView;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
@@ -6,16 +8,20 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use super::{
-    application::{Event, T},
-    rendering::Renderer,
-    simulation::Simulation,
-    watch_file,
-};
+use super::{application::Event, rendering::Renderer, simulation::Simulation, watch_file};
+
+pub type T = f64;
+type Time = Instant;
 
 pub struct ApplicationState {
     renderer: Renderer,
     simulation: Simulation,
+
+    fixed_dt: T,
+    max_fixed_dt: T,
+    last_instant: Time,
+    physics_lag: T,
+
     pub should_exit: bool,
 }
 
@@ -31,7 +37,32 @@ impl ApplicationState {
             renderer,
             should_exit: false,
             simulation: Simulation::new(),
+            fixed_dt: 0.016666,
+            max_fixed_dt: 0.1,
+            last_instant: Instant::now(),
+            physics_lag: 0.0,
         }
+    }
+
+    pub fn next_frame(&mut self) {
+        let new_time = Instant::now();
+        let frame_time = new_time.duration_since(self.last_instant).as_secs_f64();
+        if frame_time > self.max_fixed_dt {
+            println!("Lagging")
+        }
+        let frame_time = frame_time.min(self.max_fixed_dt);
+        self.last_instant = new_time;
+        self.physics_lag += frame_time;
+        self.before_fixed_updates();
+        while self.physics_lag >= self.fixed_dt {
+            self.fixed_update(self.fixed_dt as f32);
+            self.physics_lag -= self.fixed_dt;
+        }
+        self.after_fixed_updates();
+        self.update(frame_time);
+
+        let blend = self.physics_lag / self.fixed_dt;
+        self.render(blend, frame_time);
     }
 
     pub fn on_resize(&mut self, size: PhysicalSize<u32>) {

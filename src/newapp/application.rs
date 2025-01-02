@@ -10,19 +10,11 @@ use winit::{
 
 use super::application_state::ApplicationState;
 
-pub type T = f64;
-type Time = Instant;
-
 pub struct Application {
     window: Option<Arc<Window>>,
     state: Option<ApplicationState>,
     instance: wgpu::Instance,
     proxy: EventLoopProxy<Event>,
-
-    fixed_dt: T,
-    max_fixed_dt: T,
-    last_instant: Time,
-    physics_lag: T,
 }
 
 #[derive(Debug)]
@@ -36,34 +28,8 @@ impl Application {
             instance: wgpu::Instance::new(wgpu::InstanceDescriptor::default()),
             window: None,
             state: None,
-            fixed_dt: 0.016666,
-            max_fixed_dt: 0.1,
-            last_instant: Instant::now(),
-            physics_lag: 0.0,
             proxy,
         }
-    }
-
-    fn next_frame(&mut self) {
-        let state = self.state.as_mut().unwrap();
-        let new_time = Instant::now();
-        let frame_time = new_time.duration_since(self.last_instant).as_secs_f64();
-        if frame_time > self.max_fixed_dt {
-            println!("Lagging")
-        }
-        let frame_time = frame_time.min(self.max_fixed_dt);
-        self.last_instant = new_time;
-        self.physics_lag += frame_time;
-        state.before_fixed_updates();
-        while self.physics_lag >= self.fixed_dt {
-            state.fixed_update(self.fixed_dt as f32);
-            self.physics_lag -= self.fixed_dt;
-        }
-        state.after_fixed_updates();
-        state.update(frame_time);
-
-        let blend = self.physics_lag / self.fixed_dt;
-        state.render(blend, frame_time);
     }
 
     fn get_state(&mut self) -> &mut ApplicationState {
@@ -122,7 +88,10 @@ impl ApplicationHandler<Event> for Application {
         match event {
             WindowEvent::RedrawRequested => {
                 if !self.get_state().should_exit {
-                    self.next_frame();
+                    {
+                        let this = &mut *self;
+                        this.state.as_mut().unwrap().next_frame();
+                    };
                     self.window.as_ref().unwrap().request_redraw();
                 } else {
                     event_loop.exit();

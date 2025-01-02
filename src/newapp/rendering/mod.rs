@@ -8,11 +8,7 @@ use simulation::SimulationRenderer;
 use square_mesh::SquareMesh;
 use winit::{dpi::PhysicalSize, event_loop::EventLoopProxy};
 
-use super::{
-    application::{Event, T},
-    simulation::Simulation,
-    watch_file,
-};
+use super::{application::Event, application_state::T, simulation::Simulation, watch_file};
 
 pub struct RenderingContext {
     device: wgpu::Device,
