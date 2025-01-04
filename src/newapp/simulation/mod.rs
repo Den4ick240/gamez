@@ -1,48 +1,35 @@
+mod box_constraint;
+mod integrator;
+mod sorted_store;
+mod spatial_hash;
+
 use std::{
-    cell::UnsafeCell,
     f32::consts::PI,
     fs::{File, OpenOptions},
-    sync::{Arc, Barrier},
-    thread,
+    sync::Barrier,
     time::Instant,
 };
 
-use egui::mutex::Mutex;
-use glam::{vec2, Vec2};
+use box_constraint::BoxConstraint;
+use glam::{uvec2, vec2, UVec2, Vec2};
 use image::{GenericImageView, Pixel};
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
+use spatial_hash::{fixed_size_grid::FixedSizeGrid, pointer_hash::PointerHash, SpatialGrid};
 use std::io::{self, Read, Write};
 
-struct SafePointer(*mut Particle);
-
-// Manually implement Send for the raw pointer
-// This is safe because we are ensuring that the indices do not overlap
-unsafe impl Sync for SafePointer {}
-unsafe impl Send for SafePointer {}
-unsafe impl Sync for Particle {}
-unsafe impl Send for Particle {}
+use super::profiler::{self, Profiler};
 
 pub struct Particle {
+    pub initial_id: usize,
     pub position: Vec2,
-    pub previous_position: Vec2,
     pub velocity: Vec2,
     pub radius: f32,
 }
 
 const BOUND_RADIUS: f32 = 300.0;
 const MAX_PARTICLE_RADIUS: f32 = 1.0;
-
-#[derive(Debug)]
-struct SpatialHash {
-    grid_origin: Vec2,
-    height: u32,
-    width: u32,
-    cell_size: f32,
-
-    indexes: Vec<usize>,
-    pointers: Vec<usize>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Color {
@@ -51,91 +38,20 @@ pub struct Color {
     pub b: f32,
 }
 
-#[derive(Debug)]
-struct CellCoords {
-    pub x: u32,
-    pub y: u32,
-}
-
-impl SpatialHash {
-    pub fn new(cell_size: f32, grid_origin: Vec2, height: u32, width: u32) -> Self {
-        let n_cells = height as usize * width as usize;
-        let pointers = vec![0; n_cells + 1];
-        let indexes = vec![];
-        Self {
-            grid_origin,
-            height,
-            width,
-            cell_size,
-            indexes,
-            pointers,
-        }
-    }
-
-    pub fn get_cell_coords(&self, position: &Vec2) -> CellCoords {
-        let x = ((position.x - self.grid_origin.x) / self.cell_size) as u32;
-        let y = ((position.y - self.grid_origin.y) / self.cell_size) as u32;
-        CellCoords { x, y }
-    }
-
-    pub fn build<'a, I>(&mut self, positions: I)
-    where
-        I: ExactSizeIterator<Item = &'a Vec2> + Clone,
-    {
-        let n_positions = positions.len();
-        self.indexes.resize(n_positions, 0);
-        self.pointers.fill(0);
-        for position in positions.clone() {
-            let cell_coords = self.get_cell_coords(position);
-            let cell_index = self
-                .get_cell_index(&cell_coords)
-                .min(self.pointers.len() - 2);
-            self.pointers[cell_index] += 1;
-        }
-        let mut sum = 0;
-        for pointer in &mut self.pointers {
-            sum += *pointer;
-            *pointer = sum;
-        }
-        for (index, position) in positions.enumerate() {
-            let cell_coords = self.get_cell_coords(position);
-            let cell_index = self
-                .get_cell_index(&cell_coords)
-                .min(self.pointers.len() - 2);
-            self.pointers[cell_index] -= 1;
-            self.indexes[self.pointers[cell_index]] = index;
-        }
-    }
-
-    pub fn get_indexes_by_cell(&self, x: u32, y: u32) -> &[usize] {
-        if x >= self.width || y >= self.height {
-            return &[];
-        }
-        let cell_index = self.get_cell_index(&CellCoords { x, y });
-        let start = self.pointers[cell_index];
-        let end = self.pointers[cell_index + 1];
-        &self.indexes[start..end]
-    }
-
-    fn get_cell_index(&self, coords: &CellCoords) -> usize {
-        coords.x as usize + coords.y as usize * self.width as usize
-    }
-
-    pub fn get_index_by_position(&self, position: Vec2) -> usize {
-        self.get_cell_index(&self.get_cell_coords(&position))
-    }
-}
-
 pub struct Simulation {
     particles: Vec<Particle>,
+    previous_positions: Vec<Vec2>,
     updates: u64,
     rng: StdRng,
-    spatial_hash: SpatialHash,
-    colors: Vec<Color>,
+    spatial_hash: PointerHash<FixedSizeGrid>,
+    pub colors: Vec<Color>,
     colors_changed: bool,
     collision_detection_mode: u32,
     elapsed: Option<f64>,
+    thread_pool: ThreadPool,
 }
+
+const NUM_THREADS: usize = 7;
 
 impl Simulation {
     pub fn new() -> Self {
@@ -145,37 +61,29 @@ impl Simulation {
         ];
         let rng: StdRng = SeedableRng::from_seed(seed);
         let particles = vec![];
-        // let colors = vec![
-        //     Color {
-        //         r: 0.0,
-        //         g: 0.0,
-        //         b: 0.0
-        //     };
-        //     10000
-        // ];
         let colors = load_vector_from_file("colors.bin")
             .unwrap()
             .unwrap_or(vec![]);
 
-        let bounds_size = BOUND_RADIUS * 2.0;
-        let grid_offset = vec2(-BOUND_RADIUS, -BOUND_RADIUS);
         let min_cell_size = MAX_PARTICLE_RADIUS * 2.0;
-        let width = (bounds_size / min_cell_size) as u32;
-        let height = (bounds_size / min_cell_size) as u32;
-        let cell_size = bounds_size / width as f32;
-        println!("cell_size {cell_size}");
-        println!("width {width}");
-        println!("* {}", width as f32 * cell_size);
 
         Self {
             particles,
+            previous_positions: vec![],
             updates: 0,
             rng,
-            spatial_hash: SpatialHash::new(cell_size, grid_offset, width, height),
+            spatial_hash: PointerHash::new(FixedSizeGrid::new(
+                min_cell_size,
+                BoxConstraint::around_center(BOUND_RADIUS),
+            )),
             colors,
             colors_changed: true,
             collision_detection_mode: 1,
             elapsed: None,
+            thread_pool: ThreadPoolBuilder::new()
+                .num_threads(NUM_THREADS)
+                .build()
+                .unwrap(),
         }
     }
 
@@ -199,21 +107,31 @@ impl Simulation {
         }
     }
 
-    pub fn update(&mut self, dt: f32) {
+    pub fn update(&mut self, dt: f32, profiler: &mut Profiler) {
         self.spawn();
         let steps = 8;
+
+        profiler.start(profiler::Kind::BulidSpatialHash);
         // self.particles
-        //     .sort_by_cached_key(|p| self.spatial_hash.get_index_by_position(p.position));
+        //     .sort_by_cached_key(|p| self.spatial_hash.grid().get_position_cell_index(p.position));
         self.spatial_hash
             .build(self.particles.iter().map(|it| &it.position));
+        profiler.end(profiler::Kind::BulidSpatialHash);
         {
             let dt = dt / steps as f32;
             for _ in 0..steps {
-                self.integrate(dt);
-                self.apply_box_constraint(dt);
+                profiler.start(profiler::Kind::UpdateParticles);
+                self.update_particles(dt);
+                profiler.end(profiler::Kind::UpdateParticles);
+                profiler.start(profiler::Kind::CollisionDetectionAndResolution);
                 self.apply_distance_constraints(dt);
-                for particle in &mut self.particles {
-                    particle.velocity = (particle.position - particle.previous_position) / dt;
+                profiler.end(profiler::Kind::CollisionDetectionAndResolution);
+                for (particle, previous_position) in self
+                    .particles
+                    .iter_mut()
+                    .zip(self.previous_positions.iter())
+                {
+                    particle.velocity = (particle.position - previous_position) / dt;
                     let damp = 100.0 / particle.velocity.length();
                     if damp < 1.0 {
                         particle.velocity *= damp;
@@ -222,10 +140,6 @@ impl Simulation {
             }
         }
         self.updates += 1;
-        if self.updates % 30 == 0 {
-            println!("Elapsed {}", self.elapsed.unwrap_or(0.0) * 1000.0);
-            self.elapsed = None;
-        }
     }
 
     fn spawn(&mut self) {
@@ -239,8 +153,8 @@ impl Simulation {
             let offset = velocity.perp().normalize() * 2.0;
             for i in 0..85 {
                 self.particles.push(Particle {
+                    initial_id: self.particles.len(),
                     position: vec2(-170.0, 40.0) + offset * i as f32,
-                    previous_position: Vec2::ZERO,
                     radius: self.rng.get_random_size(),
                     velocity,
                 });
@@ -252,7 +166,7 @@ impl Simulation {
         }
     }
 
-    fn integrate(&mut self, dt: f32) {
+    fn update_particles(&mut self, dt: f32) {
         let len = self.particles.len();
         // let gravity = vec2(0.0, -30.00);
         let gravity = glam::vec2(0.0, -30.81)
@@ -261,73 +175,39 @@ impl Simulation {
             } else {
                 1.0
             };
-        // let gravity = glam::Vec2::ZERO;
-        for particle in &mut self.particles {
-            particle.previous_position = particle.position;
-            // particle.position += particle.velocity * dt + gravity * dt * dt;
-            particle.velocity += gravity * dt;
-            particle.position += particle.velocity * dt;
-        }
-    }
+        let constraint = BoxConstraint::around_center(BOUND_RADIUS);
+        self.previous_positions.reserve(self.particles.len());
+        // we will write to the whole length of this vec in the following code, without reading
+        unsafe { self.previous_positions.set_len(self.particles.len()) };
 
-    fn apply_box_constraint(&mut self, _dt: f32) {
-        let box_size = BOUND_RADIUS;
-        for particle in &mut self.particles {
-            if particle.position.y - particle.radius < -box_size {
-                particle.position.y = -box_size + particle.radius;
-                particle.velocity.y = -particle.velocity.y;
-            }
-            if particle.position.y + particle.radius > box_size {
-                particle.position.y = box_size - particle.radius;
-                particle.velocity.y = -particle.velocity.y;
-            }
-            if particle.position.x - particle.radius < -box_size {
-                particle.position.x = -box_size + particle.radius;
-                particle.velocity.x = -particle.velocity.x;
-            }
-            if particle.position.x + particle.radius > box_size {
-                particle.position.x = box_size - particle.radius;
-                particle.velocity.x = -particle.velocity.x;
-            }
-        }
-    }
-
-    fn collide_cells(&mut self, x1: usize, y1: usize, x2: usize, y2: usize, dt: f32) {
-        let indicies1 = self.spatial_hash.get_indexes_by_cell(x1 as u32, y1 as u32);
-        let indicies2 = self.spatial_hash.get_indexes_by_cell(x2 as u32, y2 as u32);
-        for i in indicies1 {
-            for j in indicies2 {
-                if i == j {
-                    continue;
-                }
-                let (first, second) = get_two_mut(&mut self.particles, *i, *j);
-                apply_distance_constraint(first, second, dt);
-            }
-        }
-    }
-
-    fn apply_to_cells(&mut self, x: u32, y: u32, dt: f32) {
-        let indicies = self.spatial_hash.get_indexes_by_cell(x, y);
-        let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
-            .into_iter()
-            .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
-            .flat_map(|(xx, yy)| self.spatial_hash.get_indexes_by_cell(xx, yy));
-
-        for (i, first_index) in indicies.iter().enumerate() {
-            for second_index in indicies.iter().skip(i + 1).chain(other_indicies.clone()) {
-                let (first, second) = get_two_mut(&mut self.particles, *first_index, *second_index);
-                apply_distance_constraint(first, second, dt);
-            }
-        }
+        let chunk_size = self.particles.len().div_ceil(NUM_THREADS);
+        self.thread_pool.scope(|s| {
+            self.particles
+                .chunks_mut(chunk_size)
+                .zip(self.previous_positions.chunks_mut(chunk_size))
+                .for_each(|(particles, previous_positions)| {
+                    s.spawn(move |_| {
+                        particles.iter_mut().zip(previous_positions).for_each(
+                            |(particle, previous_position)| {
+                                *previous_position = particle.position;
+                                particle.velocity += gravity * dt;
+                                particle.position += particle.velocity * dt;
+                                constraint.apply(particle, dt);
+                            },
+                        );
+                    })
+                });
+        });
     }
 
     fn apply_distance_constraints(&mut self, dt: f32) {
         let now = Instant::now();
-        match self.collision_detection_mode {
-            0 => self.apply_stagger_y(dt),
-            _ => self.apply_stagger_threads(dt),
-            // _ => self.apply_stagger_threads(dt),
-        }
+        // match self.collision_detection_mode {
+        //     0 => self.apply_stagger_y(dt),
+        // _ => self.apply_stagger_threads(dt),
+        // _ => self.apply_stagger_threads(dt),
+        // }
+        self.apply_stagger_threads(dt);
         let elapsed = now.elapsed().as_secs_f64();
         self.elapsed = self
             .elapsed
@@ -336,66 +216,38 @@ impl Simulation {
     }
 
     fn apply_stagger_threads(&mut self, dt: f32) {
-        const N: usize = 5;
-        let width = self.spatial_hash.width;
-        let height = self.spatial_hash.height;
+        const N: usize = NUM_THREADS;
+
+        let height = self.spatial_hash.grid().size().y;
+
         let chunk_size = height as usize / N;
 
         let data_ptr = self.particles.as_mut_ptr() as u64;
-        // let data_ptr = Arc::new(Mutex::new(self.particles.as_mut_ptr()));
 
-        let barrier = Barrier::new(N);
-        rayon::scope(|s| {
+        let barrier = &Barrier::new(N);
+        let spatial_hash = &self.spatial_hash;
+        self.thread_pool.scope(|s| {
             for n in 0..(N - 1) {
                 let start = n * chunk_size;
                 let end = (start + chunk_size) as u32;
                 let start1 = if start % 2 == 0 { start } else { start + 1 } as u32;
                 let start2 = if start % 2 == 0 { start + 1 } else { start } as u32;
-                // println!("Start1 {start1} start2: {start2}, end: {end}");
-                let spatial_hash = &self.spatial_hash;
-                let barrier = &barrier;
                 s.spawn(move |_| {
-                    for y in (start1..end).step_by(2) {
-                        for x in 0..width {
-                            let indicies = spatial_hash.get_indexes_by_cell(x, y);
-                            let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
-                                .into_iter()
-                                .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
-                                .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(xx, yy));
+                    Self::run_collision(
+                        (start1..end).step_by(2),
+                        spatial_hash,
+                        data_ptr as *mut Particle,
+                        dt,
+                    );
 
-                            for (i, first_index) in indicies.iter().enumerate() {
-                                for second_index in
-                                    indicies.iter().skip(i + 1).chain(other_indicies.clone())
-                                {
-                                    let data_ptr = data_ptr as *mut Particle;
-                                    let first = unsafe { &mut *(data_ptr.add(*first_index)) };
-                                    let second = unsafe { &mut *(data_ptr.add(*second_index)) };
-                                    apply_distance_constraint(first, second, dt);
-                                }
-                            }
-                        }
-                    }
                     barrier.wait();
-                    for y in (start2..end).step_by(2) {
-                        for x in 0..width {
-                            let indicies = spatial_hash.get_indexes_by_cell(x, y);
-                            let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
-                                .into_iter()
-                                .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
-                                .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(xx, yy));
 
-                            for (i, first_index) in indicies.iter().enumerate() {
-                                for second_index in
-                                    indicies.iter().skip(i + 1).chain(other_indicies.clone())
-                                {
-                                    let data_ptr = data_ptr as *mut Particle;
-                                    let first = unsafe { &mut *(data_ptr.add(*first_index)) };
-                                    let second = unsafe { &mut *(data_ptr.add(*second_index)) };
-                                    apply_distance_constraint(first, second, dt);
-                                }
-                            }
-                        }
-                    }
+                    Self::run_collision(
+                        (start2..end).step_by(2),
+                        spatial_hash,
+                        data_ptr as *mut Particle,
+                        dt,
+                    );
                 });
             }
 
@@ -403,132 +255,22 @@ impl Simulation {
             let end = height;
             let start1 = if start % 2 == 0 { start } else { start + 1 } as u32;
             let start2 = if start % 2 == 0 { start + 1 } else { start } as u32;
-            // println!("Start1 {start1} start2: {start2}, end: {end}");
-            let spatial_hash = &self.spatial_hash;
-            let barrier = &barrier;
-            for y in (start1..end).step_by(2) {
-                for x in 0..width {
-                    let indicies = spatial_hash.get_indexes_by_cell(x, y);
-                    let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
-                        .into_iter()
-                        .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
-                        .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(xx, yy));
+            Self::run_collision(
+                (start1..end).step_by(2),
+                spatial_hash,
+                data_ptr as *mut Particle,
+                dt,
+            );
 
-                    for (i, first_index) in indicies.iter().enumerate() {
-                        for second_index in
-                            indicies.iter().skip(i + 1).chain(other_indicies.clone())
-                        {
-                            let data_ptr = data_ptr as *mut Particle;
-                            let first = unsafe { &mut *(data_ptr.add(*first_index)) };
-                            let second = unsafe { &mut *(data_ptr.add(*second_index)) };
-                            apply_distance_constraint(first, second, dt);
-                        }
-                    }
-                }
-            }
             barrier.wait();
-            for y in (start2..end).step_by(2) {
-                for x in 0..width {
-                    let indicies = spatial_hash.get_indexes_by_cell(x, y);
-                    let other_indicies = [(x + 1, y), (x, y + 1), (x + 1, y + 1)]
-                        .into_iter()
-                        .chain(if x > 0 { Some((x - 1, y + 1)) } else { None })
-                        .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(xx, yy));
 
-                    for (i, first_index) in indicies.iter().enumerate() {
-                        for second_index in
-                            indicies.iter().skip(i + 1).chain(other_indicies.clone())
-                        {
-                            let data_ptr = data_ptr as *mut Particle;
-                            let first = unsafe { &mut *(data_ptr.add(*first_index)) };
-                            let second = unsafe { &mut *(data_ptr.add(*second_index)) };
-                            apply_distance_constraint(first, second, dt);
-                        }
-                    }
-                }
-            }
+            Self::run_collision(
+                (start2..end).step_by(2),
+                spatial_hash,
+                data_ptr as *mut Particle,
+                dt,
+            );
         });
-    }
-
-    fn apply_stagger(&mut self, dt: f32) {
-        let width = self.spatial_hash.width;
-        let height = self.spatial_hash.height;
-        for y in (0..height).step_by(2).chain((1..height).step_by(2)) {
-            for x in (0..width)
-                .step_by(3)
-                .chain((1..width).step_by(2))
-                .chain((2..width).step_by(2))
-            {
-                self.apply_to_cells(x, y, dt);
-            }
-        }
-    }
-    fn apply_stagger_y(&mut self, dt: f32) {
-        for y in (0..self.spatial_hash.height)
-            .step_by(2)
-            .chain((1..self.spatial_hash.height).step_by(2))
-        {
-            for x in 0..self.spatial_hash.width {
-                self.apply_to_cells(x, y, dt);
-            }
-        }
-    }
-
-    fn apply_loop_particles(&mut self, dt: f32) {
-        for i in 0..self.particles.len() {
-            //can't be empty since we only enter the loop if len > 0
-            let (first, others) = self.particles[i..].split_first_mut().unwrap();
-            let cell_coords = self.spatial_hash.get_cell_coords(&first.previous_position);
-            let cells = [
-                CellCoords {
-                    x: cell_coords.x,
-                    y: cell_coords.y,
-                },
-                CellCoords {
-                    x: cell_coords.x,
-                    y: cell_coords.y + 1,
-                },
-                CellCoords {
-                    x: cell_coords.x,
-                    y: (cell_coords.y as i32 - 1) as u32,
-                },
-                CellCoords {
-                    x: cell_coords.x + 1,
-                    y: cell_coords.y,
-                },
-                CellCoords {
-                    x: cell_coords.x + 1,
-                    y: cell_coords.y + 1,
-                },
-                CellCoords {
-                    x: cell_coords.x + 1,
-                    y: (cell_coords.y as i32 - 1) as u32,
-                },
-                CellCoords {
-                    x: (cell_coords.x as i32 - 1) as u32,
-                    y: cell_coords.y,
-                },
-                CellCoords {
-                    x: (cell_coords.x as i32 - 1) as u32,
-                    y: cell_coords.y + 1,
-                },
-                CellCoords {
-                    x: (cell_coords.x as i32 - 1) as u32,
-                    y: (cell_coords.y as i32 - 1) as u32,
-                },
-            ];
-
-            let indicies = cells
-                .iter()
-                .map(|coords| self.spatial_hash.get_indexes_by_cell(coords.x, coords.y))
-                .flatten()
-                .filter(|&&index| index > i);
-
-            for j in indicies {
-                let second = &mut others[j - i - 1];
-                apply_distance_constraint(first, second, dt);
-            }
-        }
     }
 
     pub fn on_image_loaded(&mut self, img: image::DynamicImage) {
@@ -570,6 +312,63 @@ impl Simulation {
         }
         save_vector_to_file(&self.colors, "colors.bin").unwrap();
         self.colors_changed = true;
+    }
+
+    fn run_collision(
+        y: std::iter::StepBy<std::ops::Range<u32>>,
+        spatial_hash: &PointerHash<FixedSizeGrid>,
+        data_ptr: *mut Particle,
+        dt: f32,
+    ) {
+        let UVec2 {
+            x: width,
+            y: height,
+        } = spatial_hash.grid().size();
+        for y in y {
+            for x in 0..width {
+                let indicies = spatial_hash.get_indexes_by_cell(uvec2(x, y));
+                let other_indicies = []
+                    .into_iter()
+                    .chain(if x < width - 1 {
+                        Some((x + 1, y))
+                    } else {
+                        None
+                    })
+                    .chain(if y < height - 1 {
+                        Some((x, y + 1))
+                    } else {
+                        None
+                    })
+                    .chain(if x < width - 1 && y < height - 1 {
+                        Some((x + 1, y + 1))
+                    } else {
+                        None
+                    })
+                    .chain(if x > 0 && y < height - 1 {
+                        Some((x - 1, y + 1))
+                    } else {
+                        None
+                    })
+                    .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(uvec2(xx, yy)));
+
+                Self::run_cell_collisions(indicies, other_indicies, data_ptr, dt);
+            }
+        }
+    }
+
+    fn run_cell_collisions<'a, I: Iterator<Item = &'a usize> + Clone>(
+        indicies: &'a [usize],
+        other_indicies: I,
+        data_ptr: *mut Particle,
+        dt: f32,
+    ) {
+        for (i, first_index) in indicies.iter().enumerate() {
+            for second_index in indicies.iter().skip(i + 1).chain(other_indicies.clone()) {
+                let first = unsafe { &mut *(data_ptr.add(*first_index)) };
+                let second = unsafe { &mut *(data_ptr.add(*second_index)) };
+                apply_distance_constraint(first, second, dt);
+            }
+        }
     }
 }
 
@@ -694,12 +493,12 @@ fn load_vector_from_file(file_path: &str) -> io::Result<Option<Vec<Color>>> {
     }
 }
 
-fn get_two_mut<T>(vec: &mut Vec<T>, first: usize, second: usize) -> (&mut T, &mut T) {
-    if first > second {
-        let (head, tail) = vec.split_at_mut(first);
-        (&mut head[second], &mut tail[0])
-    } else {
-        let (head, tail) = vec.split_at_mut(second);
-        (&mut head[first], &mut tail[0])
-    }
-}
+// fn get_two_mut<T>(vec: &mut Vec<T>, first: usize, second: usize) -> (&mut T, &mut T) {
+//     if first > second {
+//         let (head, tail) = vec.split_at_mut(first);
+//         (&mut head[second], &mut tail[0])
+//     } else {
+//         let (head, tail) = vec.split_at_mut(second);
+//         (&mut head[first], &mut tail[0])
+//     }
+// }

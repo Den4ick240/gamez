@@ -4,9 +4,11 @@ use strum::{EnumCount, EnumIter, IntoEnumIterator};
 #[derive(Debug, Copy, Clone, EnumIter, EnumCount)]
 pub enum Kind {
     Frame,
-    RenderingWhole,
-    Updates,
-    BulidSpatialCash,
+    Rendering,
+    UpdatesWhole,
+    FixedUpdate,
+    BulidSpatialHash,
+    UpdateParticles,
     CollisionDetectionAndResolution,
 }
 
@@ -121,5 +123,6 @@ impl Profiler {
                 );
             }
         }
+        println!();
     }
 }

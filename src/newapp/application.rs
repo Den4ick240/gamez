@@ -106,25 +106,32 @@ impl Application {
 
         let new_time = Instant::now();
         let frame_time = new_time.duration_since(self.last_instant).as_secs_f64();
-        if frame_time > self.max_fixed_dt {
-            println!("Lagging")
-        }
         let frame_time = frame_time.min(self.max_fixed_dt);
         self.last_instant = new_time;
         self.physics_lag += frame_time;
+
+        self.profiler.start(profiler::Kind::UpdatesWhole);
         self.before_fixed_updates();
+
         while self.physics_lag >= self.fixed_dt {
+            self.profiler.start(profiler::Kind::FixedUpdate);
             self.fixed_update(self.fixed_dt as f32);
+            self.profiler.end(profiler::Kind::FixedUpdate);
             self.physics_lag -= self.fixed_dt;
         }
+
         self.after_fixed_updates();
         self.update(frame_time);
 
+        self.profiler.end(profiler::Kind::UpdatesWhole);
+
         let blend = self.physics_lag / self.fixed_dt;
+        self.profiler.start(profiler::Kind::Rendering);
         self.render(blend, frame_time);
+        self.profiler.end(profiler::Kind::Rendering);
 
         self.profiler.end(profiler::Kind::Frame);
-        if self.frame_count % 30 == 0 {
+        if self.frame_count % 60 == 0 {
             self.profiler.display();
         }
         self.frame_count += 1;
@@ -141,7 +148,7 @@ impl Application {
     pub fn before_fixed_updates(&mut self) {}
 
     pub fn fixed_update(&mut self, dt: f32) {
-        self.simulation.update(dt);
+        self.simulation.update(dt, &mut self.profiler);
     }
 
     pub fn after_fixed_updates(&mut self) {}
