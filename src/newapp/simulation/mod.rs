@@ -6,6 +6,7 @@ mod spatial_hash;
 use std::{
     f32::consts::PI,
     fs::{File, OpenOptions},
+    ops::Div,
     sync::Barrier,
     time::Instant,
 };
@@ -125,6 +126,7 @@ impl Simulation {
                 profiler.end(profiler::Kind::UpdateParticles);
                 profiler.start(profiler::Kind::CollisionDetectionAndResolution);
                 self.apply_distance_constraints(dt);
+                // self.apply_fancy(dt);
                 profiler.end(profiler::Kind::CollisionDetectionAndResolution);
                 for (particle, previous_position) in self
                     .particles
@@ -140,6 +142,18 @@ impl Simulation {
             }
         }
         self.updates += 1;
+    }
+
+    fn apply_fancy(&mut self, dt: f32) {
+        let height = self.spatial_hash.grid().size().y as usize;
+        let num_threads = NUM_THREADS.min(height / 4);
+
+        let chunk_size = height / num_threads;
+        let last_chunk_size = height - chunk_size * (num_threads - 1);
+
+        let mut hash = self.spatial_hash.reference(&mut self.particles);
+
+        let chunks = self.thread_pool.scope(|s| {});
     }
 
     fn spawn(&mut self) {

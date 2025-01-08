@@ -1,4 +1,9 @@
-use glam::{UVec2, Vec2};
+use std::{
+    ptr::{slice_from_raw_parts, slice_from_raw_parts_mut, NonNull},
+    slice,
+};
+
+use glam::{uvec2, UVec2, Vec2};
 
 use super::SpatialGrid;
 
@@ -50,72 +55,103 @@ impl<Grid: SpatialGrid> PointerHash<Grid> {
     }
 
     pub fn get_indexes_by_cell(&self, cell: UVec2) -> &[usize] {
-        let grid = &self.grid;
-        let cell_index = grid.get_cell_index(cell);
+        let cell_index = self.grid.get_cell_index(cell);
         let start = self.pointers[cell_index];
         let end = self.pointers[cell_index + 1];
         &self.indexes[start..end]
     }
 
     pub fn reference<'a, I>(&'a self, items: &'a mut [I]) -> HashReference<'a, I, Grid> {
-        let ptr = items.as_mut_ptr() as usize;
-        let cell_iterator = self.pointers.windows(2).map(|cell| {
-            self.indexes[cell[0]..cell[1]].iter().map(|&index| {
-                unsafe { &mut *(ptr as *mut I).add(index) };
-            })
-        });
-        HashReference::new(items, &self.grid, &self.pointers, &self.indexes)
+        HashReference::<'a, I, Grid>::new(items, &self.grid, &self.pointers, &self.indexes)
     }
 }
 
-pub struct HashReference<'a, I, Grid: SpatialGrid> {
-    data: &'a mut [I],
+pub struct HashReference<'a, Item, Grid: SpatialGrid> {
+    data: NonNull<Item>,
+    indexes: &'a [usize],
+    pointers: &'a [usize],
+    grid: &'a Grid,
+    start_cell_index: usize,
+    end_cell_index: usize,
+}
+
+pub struct RowReference<'a, Item, Grid: SpatialGrid> {
+    data: NonNull<Item>,
     indexes: &'a [usize],
     pointers: &'a [usize],
     grid: &'a Grid,
     start_cell_index: usize,
 }
+//
+// impl<'a, Item, Grid: SpatialGrid> HashReference<'a, Item, Grid> {}
 
-impl<'a, I, Grid: SpatialGrid> HashReference<'a, I, Grid> {
+impl<'a, Item, Grid: SpatialGrid> HashReference<'a, Item, Grid> {
     pub(self) fn new(
-        data: &'a mut [I],
+        data: &'a [Item],
         grid: &'a Grid,
         pointers: &'a [usize],
         indexes: &'a [usize],
     ) -> Self {
         Self {
-            data,
+            data: NonNull::from(data).cast(),
             pointers,
             indexes,
             grid,
             start_cell_index: 0,
+            end_cell_index: grid.number_of_cells(),
         }
     }
 
-    pub fn split_at_mut(self, coord: UVec2) -> (Self, Self) {
+    pub fn get(
+        &'a mut self,
+        coord: UVec2,
+    ) -> std::iter::Map<slice::Iter<'a, usize>, impl FnMut(&'a usize) -> &'a mut Item> {
+        let cell_index = self.grid.get_cell_index(coord);
+        let start = self.pointers[cell_index];
+        let end = self.pointers[cell_index + 1];
+        self.indexes[start..end]
+            .iter()
+            .map(|i| unsafe { &mut *self.data.as_ptr().add(*i) })
+    }
+
+    pub fn split_at_row(self, row: u32) -> (Self, Self) {
+        self.split(uvec2(0, row))
+    }
+
+    pub fn split(self, coord: UVec2) -> (Self, Self) {
         let Self {
             data,
             pointers,
             indexes,
             grid,
             start_cell_index,
+            end_cell_index,
         } = self;
 
         let second_start_cell_index = grid.get_cell_index(coord);
 
-        // let (first_pointers, second_pointers) = pointers.split_at(mid);
-        // let (first_indexes, second_indexes) = indexes.split_at(second_star );
+        assert!(second_start_cell_index in start_cell_index..end_cell_index);
 
         let first = Self {
+            // data: unsafe {
+            //     // obtain another mutable reference to the data
+            //     &mut *slice_from_raw_parts_mut((data.as_ptr() as usize) as *mut Item, data.len())
+            // },
             data,
+            pointers: &pointers[0..second_start_cell_index + 1],
+            indexes,
             grid,
-            start_cell_coord,
+            start_cell_index,
+            end_cell_index: second_start_cell_index,
         };
 
         let second = Self {
             data,
+            pointers: &pointers[second_start_cell_index..],
+            indexes,
             grid,
-            start_cell_coord: coord,
+            start_cell_index: second_start_cell_index,
+            end_cell_index,
         };
         (first, second)
     }

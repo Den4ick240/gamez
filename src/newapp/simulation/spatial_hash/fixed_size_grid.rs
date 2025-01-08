@@ -36,8 +36,8 @@ impl SpatialGrid for FixedSizeGrid {
             .min(self.size - 1)
     }
 
-    fn get_cell_index(&self, coords: UVec2) -> usize {
-        coords.x as usize + coords.y as usize * self.size.x as usize
+    fn get_cell_index(&self, coord: UVec2) -> usize {
+        coord.x as usize + coord.y as usize * self.size.x as usize
     }
 
     fn number_of_cells(&self) -> usize {
