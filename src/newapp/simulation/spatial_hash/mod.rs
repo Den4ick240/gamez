@@ -1,6 +1,7 @@
 use glam::{UVec2, Vec2};
 pub mod fixed_size_grid;
 pub mod pointer_hash;
+pub mod sorting_hash;
 
 pub trait SpatialGrid {
     fn size(&self) -> UVec2;

@@ -4,6 +4,7 @@ use crate::newapp::simulation::box_constraint::BoxConstraint;
 
 use super::SpatialGrid;
 
+#[derive(Debug, Clone)]
 pub struct FixedSizeGrid {
     origin: Vec2,
     size: UVec2,

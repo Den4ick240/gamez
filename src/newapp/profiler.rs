@@ -9,6 +9,7 @@ pub enum Kind {
     FixedUpdate,
     BulidSpatialHash,
     UpdateParticles,
+    Sort,
     CollisionDetectionAndResolution,
 }
 

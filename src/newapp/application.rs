@@ -23,6 +23,7 @@ pub struct Application {
     should_exit: bool,
     window: Arc<Window>,
     profiler: Profiler,
+    last_displayed_time: Instant,
 
     fixed_dt: f64,
     max_fixed_dt: f64,
@@ -55,6 +56,7 @@ impl Application {
         Self {
             frame_count: 0,
             profiler: Profiler::new(),
+            last_displayed_time: Instant::now(),
             renderer,
             should_exit: false,
             simulation: Simulation::new(),
@@ -131,9 +133,13 @@ impl Application {
         self.profiler.end(profiler::Kind::Rendering);
 
         self.profiler.end(profiler::Kind::Frame);
-        if self.frame_count % 60 == 0 {
+        if self.last_displayed_time.elapsed().as_secs_f64() >= 1.0 {
             self.profiler.display();
+            self.last_displayed_time = Instant::now();
         }
+        // if self.frame_count % 60 == 0 {
+        //     self.profiler.display();
+        // }
         self.frame_count += 1;
     }
 
