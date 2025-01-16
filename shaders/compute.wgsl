@@ -12,14 +12,11 @@ struct Input {
 }
 
 struct InstanceInput {
-  @location(1) position: vec2<f32>,
+  @location(1) color: vec3<f32>,
   @location(2) radius: f32,
-  @location(3) color: vec3<f32>,
+  @location(3) position: vec2<f32>,
+  @location(4) velocity: vec2<f32>,
 }
-
-//struct ColorInput {
-//  @location(3) color: vec3<f32>,
-//}
 
 struct Output {
   @builtin(position) clip_position: vec4<f32>,
@@ -28,7 +25,7 @@ struct Output {
 }
 
 fn to_camera_pos(world_pos: vec2<f32>) -> vec2<f32> {
-    var radius = 600.0;
+    var radius = camera.fov;
     if camera.width < camera.height {
         return vec2<f32>(
             world_pos.x * 2 / radius,
@@ -42,8 +39,9 @@ fn to_camera_pos(world_pos: vec2<f32>) -> vec2<f32> {
     }
 }
 
+
 @vertex
-fn vs_simulation(input: Input, instance: InstanceInput) -> Output {
+fn vs_particles(input: Input, instance: InstanceInput) -> Output {
     var radius = instance.radius;
     var world_pos = instance.position + input.position * radius;
     var camera_pos = to_camera_pos(world_pos);
@@ -55,9 +53,21 @@ fn vs_simulation(input: Input, instance: InstanceInput) -> Output {
 }
 
 @fragment
-fn fs_simulation(input: Output) -> @location(0) vec4<f32> {
+fn fs_particles(input: Output) -> @location(0) vec4<f32> {
     if length(input.pos) > 1.0 {
       discard;
     }
     return vec4<f32>(input.color, 1.0);
 }
+
+
+@group(0) @binding(0) 
+var<storage, read_write> particles:  array<InstanceInput>;
+
+@compute @workgroup_size(1)
+fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    if global_id.x == 0 && global_id.y == 0 && global_id.z == 0 {
+        particles[0].position.y = particles[0].position.y - 0.1;
+    }
+}
+

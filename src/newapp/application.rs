@@ -11,14 +11,14 @@ use winit::{
 
 use super::{
     application_handler::Event,
+    gpu_simulation::Simulation,
     profiler::{self, Profiler},
     rendering::Renderer,
-    simulation::Simulation,
     watch_file,
 };
 
 pub struct Application {
-    renderer: Renderer,
+    // renderer: Renderer,
     simulation: Simulation,
     should_exit: bool,
     window: Arc<Window>,
@@ -52,14 +52,15 @@ impl Application {
         let surface = instance
             .create_surface(window.clone())
             .expect("Failed to create surface!");
-        let renderer = Renderer::new(&instance, surface, size, proxy).await;
+        let simulation = Simulation::new(&instance, surface, size, proxy).await;
+        // let renderer = Renderer::new().await;
         Self {
             frame_count: 0,
             profiler: Profiler::new(),
             last_displayed_time: Instant::now(),
-            renderer,
+            // renderer,
             should_exit: false,
-            simulation: Simulation::new(),
+            simulation,
             fixed_dt: 0.016666,
             max_fixed_dt: 0.1,
             last_instant: Instant::now(),
@@ -144,11 +145,13 @@ impl Application {
     }
 
     pub fn on_resize(&mut self, size: PhysicalSize<u32>) {
-        self.renderer.on_resize(size);
+        // self.renderer.on_resize(size);
+        self.simulation.on_resize(size);
     }
 
     pub fn render(&mut self, blend: f64, dt: f64) {
-        self.renderer.render(&mut self.simulation, blend, dt);
+        // self.renderer.render_gpu(&mut self.simulation, blend, dt);
+        self.simulation.render(blend, dt);
     }
 
     pub fn before_fixed_updates(&mut self) {}
@@ -163,12 +166,12 @@ impl Application {
 
     pub fn on_keyboard_input(&mut self, event: KeyEvent) {
         match event {
-            KeyEvent {
-                physical_key: PhysicalKey::Code(KeyCode::KeyC),
-                repeat: false,
-                state: ElementState::Pressed,
-                ..
-            } => self.simulation.toggle_collision_detection_mode(),
+            // KeyEvent {
+            //     physical_key: PhysicalKey::Code(KeyCode::KeyC),
+            //     repeat: false,
+            //     state: ElementState::Pressed,
+            //     ..
+            // } => self.simulation.toggle_collision_detection_mode(),
             KeyEvent {
                 physical_key: PhysicalKey::Code(code),
                 ..
@@ -184,18 +187,19 @@ impl Application {
     }
 
     pub fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        let size = self.renderer.screen_size();
-        let scale = 100.0 / size.width as f64;
-        let x = position.x - size.width as f64 / 2.0;
-        let y = position.y - size.height as f64 / 2.0;
-        self.simulation
-            .on_mouse_move(glam::vec2((x * scale) as f32, -(y * scale) as f32));
+        // let size = self.renderer.screen_size();
+        // let scale = 100.0 / size.width as f64;
+        // let x = position.x - size.width as f64 / 2.0;
+        // let y = position.y - size.height as f64 / 2.0;
+        // self.simulation
+        //     .on_mouse_move(glam::vec2((x * scale) as f32, -(y * scale) as f32));
     }
 
     pub fn on_mouse_input(&mut self, _: winit::event::ElementState, _: winit::event::MouseButton) {}
 
     pub fn on_user_event(&mut self, event: &Event) {
-        self.renderer.on_event(event);
+        self.simulation.on_event(event);
+        // self.renderer.on_event(event);
     }
 
     pub fn on_file_dropped(&mut self, path: std::path::PathBuf) {
@@ -203,6 +207,6 @@ impl Application {
         let img = image::open(path).expect("Failed to load image");
         let (width, height) = img.dimensions();
         println!("width: {width}, height: {height}");
-        self.simulation.on_image_loaded(img);
+        // self.simulation.on_image_loaded(img);
     }
 }

@@ -1,14 +1,17 @@
-mod camera_uniform;
+pub mod camera_uniform;
 mod simulation;
-mod square_mesh;
-mod wgpu_utils;
+pub mod square_mesh;
+pub mod wgpu_utils;
 
 use camera_uniform::CameraUniform;
 use simulation::SimulationRenderer;
 use square_mesh::SquareMesh;
 use winit::{dpi::PhysicalSize, event_loop::EventLoopProxy};
 
-use super::{application_handler::Event, simulation::Simulation, watch_file};
+use super::{
+    application_handler::Event, gpu_simulation::Simulation as GpuSimulation,
+    simulation::Simulation, watch_file,
+};
 
 pub struct RenderingContext {
     device: wgpu::Device,
@@ -35,6 +38,7 @@ impl Renderer {
         surface: wgpu::Surface<'static>,
         size: PhysicalSize<u32>,
         proxy: &EventLoopProxy<Event>,
+        fov: f32,
     ) -> Self {
         watch_file::init(proxy, SHADER_FILE);
         let adapter = instance
@@ -46,12 +50,11 @@ impl Renderer {
             .await
             .expect("Failed to find an appropriate adapter");
 
-        let features = wgpu::Features::empty();
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: features,
+                    required_features: wgpu::Features::empty(),
                     required_limits: Default::default(),
                     memory_hints: Default::default(),
                 },
@@ -82,7 +85,7 @@ impl Renderer {
         surface.configure(&device, &surface_config);
         let shader_module = load_shader(&device, &surface_config);
 
-        let camera_uniform = CameraUniform::new(&device, size);
+        let camera_uniform = CameraUniform::new(&device, size, fov);
 
         let main_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -150,14 +153,16 @@ impl Renderer {
             .on_shader_updated(&self.context, &self.shader_module);
     }
 
-    pub fn on_resize(&mut self, size: PhysicalSize<u32>) {
+    pub fn on_resize(&mut self, size: PhysicalSize<u32>, fov: f32) {
         self.context.surface_config.width = size.width;
         self.context.surface_config.height = size.height;
         self.surface
             .configure(&self.context.device, &self.context.surface_config);
-        self.camera_uniform.on_resize(&self.context.queue, size);
+        self.camera_uniform
+            .on_resize(&self.context.queue, size, fov);
     }
 
+    pub fn render_gpu(&mut self, simulation: &mut GpuSimulation, _: f64, _: f64) {}
     pub fn render(&mut self, simulation: &mut Simulation, _: f64, _: f64) {
         let surface_texture = self
             .surface

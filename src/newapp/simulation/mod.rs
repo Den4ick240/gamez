@@ -7,7 +7,7 @@ use std::{
     f32::consts::PI,
     fs::{File, OpenOptions},
     ops::Div,
-    sync::{Barrier, Mutex},
+    sync::{atomic::AtomicBool, Barrier, Mutex},
     time::Instant,
 };
 
@@ -59,7 +59,7 @@ pub struct Simulation {
     thread_pool: ThreadPool,
 }
 
-const NUM_THREADS: usize = 8;
+const NUM_THREADS: usize = 4;
 
 impl Simulation {
     pub fn new() -> Self {
@@ -85,7 +85,7 @@ impl Simulation {
             sorting_hash: SortingHash::new(grid),
             colors,
             colors_changed: true,
-            collision_detection_mode: 1,
+            collision_detection_mode: 0,
             elapsed: None,
             thread_pool: ThreadPoolBuilder::new()
                 .num_threads(NUM_THREADS)
@@ -119,7 +119,7 @@ impl Simulation {
         let steps = 8;
 
         match self.collision_detection_mode {
-            0 => {
+            _ => {
                 profiler.start(profiler::Kind::BulidSpatialHash);
                 self.spatial_hash
                     .build(self.particles.iter().map(|it| &it.position));
@@ -247,12 +247,12 @@ impl Simulation {
         // let count = 8900;
         // let count = 35200; //175
         let count = 107500;
-        if self.particles.len() < count && self.updates % 4 == 0 {
+        if self.particles.len() < count && self.updates % 2 == 0 {
             let velocity =
                 // glam::Vec2::from_angle(f32::sin(self.updates as f32 / 40.0) * PI * 0.125) * 80.0;
-                vec2(20.0, 0.0);
+                vec2(70.0, 0.0);
             let offset = velocity.perp().normalize() * 2.0;
-            for i in 0..85 {
+            for i in 0..95 {
                 self.particles.push(Particle {
                     initial_id: self.particles.len(),
                     position: vec2(-170.0, 40.0) + offset * i as f32,
@@ -305,6 +305,7 @@ impl Simulation {
         // let now = Instant::now();
         match self.collision_detection_mode {
             0 => self.apply_stagger_threads(dt),
+            1 => self.apply_stagger_threads_mutex(dt),
             _ => self.apply_sorted_threads(dt),
             // // _ => self.apply_stagger_threads(dt),
         }
@@ -371,6 +372,127 @@ impl Simulation {
                 data_ptr as *mut Particle,
                 dt,
             );
+        });
+    }
+    fn apply_stagger_threads_mutex(&mut self, dt: f32) {
+        let height = self.spatial_hash.grid().size().y as usize;
+        let num_threads = NUM_THREADS.min(height / 4);
+
+        let even_height = height & !1;
+        let even_chunk_size = (even_height / num_threads) & !1;
+
+        // always overflow < num_threads * 2 and is even
+        let overflow = even_height - even_chunk_size * num_threads;
+
+        // always < num_threads and divides evenly
+        let num_chunks_to_increase = overflow / 2; // some chunks will be increased by 2
+
+        let small_chunk_size = even_chunk_size;
+        let big_chunk_suze = even_chunk_size + 2;
+
+        let overlaps = (1..num_chunks_to_increase)
+            .map(|i| (i * big_chunk_suze) as u32)
+            .chain(
+                ((num_chunks_to_increase)..num_threads)
+                    .map(|i| (i * small_chunk_size + num_chunks_to_increase * 2) as u32),
+            )
+            .map(|start| (start, AtomicBool::new(false)))
+            .collect::<Vec<_>>();
+
+        let spatial_hash = &self.spatial_hash;
+        let UVec2 {
+            x: width,
+            y: height,
+        } = spatial_hash.grid().size();
+
+        let data_ptr = self.particles.as_mut_ptr() as u64;
+        let barrier = &Barrier::new(num_threads);
+        self.thread_pool.scope(|s| {
+            s.spawn(|_| {
+                let (start, start_mut) = overlaps.last().unwrap();
+                Self::run_mutex_collision(
+                    barrier,
+                    *start,
+                    height,
+                    Some(start_mut),
+                    None,
+                    spatial_hash,
+                    data_ptr as *mut Particle,
+                    dt,
+                );
+            });
+            for it in overlaps.windows(2) {
+                s.spawn(|_| {
+                    let (start, start_mut) = &it[0];
+                    let (end, end_mut) = &it[1];
+                    Self::run_mutex_collision(
+                        barrier,
+                        *start,
+                        *end,
+                        Some(start_mut),
+                        Some(end_mut),
+                        spatial_hash,
+                        data_ptr as *mut Particle,
+                        dt,
+                    );
+                });
+            }
+            s.spawn(|_| {
+                let (end, end_mut) = &overlaps[0];
+                Self::run_mutex_collision(
+                    barrier,
+                    0,
+                    *end,
+                    None,
+                    Some(end_mut),
+                    spatial_hash,
+                    data_ptr as *mut Particle,
+                    dt,
+                );
+            });
+            // for n in 0..(N - 1) {
+            //     let start = n * chunk_size;
+            //     let end = (start + chunk_size) as u32;
+            //     let start1 = if start % 2 == 0 { start } else { start + 1 } as u32;
+            //     let start2 = if start % 2 == 0 { start + 1 } else { start } as u32;
+            //     s.spawn(move |_| {
+            //         Self::run_collision(
+            //             (start1..end).step_by(2),
+            //             spatial_hash,
+            //             data_ptr as *mut Particle,
+            //             dt,
+            //         );
+            //
+            //         barrier.wait();
+            //
+            //         Self::run_collision(
+            //             (start2..end).step_by(2),
+            //             spatial_hash,
+            //             data_ptr as *mut Particle,
+            //             dt,
+            //         );
+            //     });
+            // }
+            //
+            // let start = (N - 1) * chunk_size;
+            // let end = height;
+            // let start1 = if start % 2 == 0 { start } else { start + 1 } as u32;
+            // let start2 = if start % 2 == 0 { start + 1 } else { start } as u32;
+            // Self::run_collision(
+            //     (start1..end).step_by(2),
+            //     spatial_hash,
+            //     data_ptr as *mut Particle,
+            //     dt,
+            // );
+            //
+            // barrier.wait();
+            //
+            // Self::run_collision(
+            //     (start2..end).step_by(2),
+            //     spatial_hash,
+            //     data_ptr as *mut Particle,
+            //     dt,
+            // );
         });
     }
 
@@ -472,6 +594,57 @@ impl Simulation {
         save_vector_to_file(&self.colors, "colors.bin").unwrap();
         self.colors_changed = true;
     }
+    fn run_mutex_collision(
+        barrier: &Barrier,
+        start: u32, //always even
+        end: u32,   // even if end mutex exists otherwice == height
+        start_mut: Option<&AtomicBool>,
+        end_mut: Option<&AtomicBool>,
+        spatial_hash: &PointerHash<FixedSizeGrid>,
+        data_ptr: *mut Particle,
+        dt: f32,
+    ) {
+        // let UVec2 {
+        //     x: width,
+        //     y: height,
+        // } = spatial_hash.grid().size();
+        // {
+        //     let _guard = start_mut.map(|it| it.store(val, order));
+        //     barrier.wait();
+        //     Self::run_row_collision(start, width, height, spatial_hash, data_ptr, dt);
+        // }
+        //
+        // for y in ((start + 1)..(end - 1)).step_by(2) {
+        //     Self::run_row_collision(
+        //         y + 1,
+        //         width,
+        //         height,
+        //         spatial_hash,
+        //         data_ptr as *mut Particle,
+        //         dt,
+        //     );
+        //     Self::run_row_collision(
+        //         y,
+        //         width,
+        //         height,
+        //         spatial_hash,
+        //         data_ptr as *mut Particle,
+        //         dt,
+        //     );
+        // }
+        //
+        // if end & 1 == 0 {
+        //     let _guard = end_mut.map(|it| it.lock());
+        //     Self::run_row_collision(
+        //         end - 1,
+        //         width,
+        //         height,
+        //         spatial_hash,
+        //         data_ptr as *mut Particle,
+        //         dt,
+        //     )
+        // }
+    }
 
     fn run_sorted_collision(
         y: std::iter::StepBy<std::ops::Range<u32>>,
@@ -555,34 +728,45 @@ impl Simulation {
             y: height,
         } = spatial_hash.grid().size();
         for y in y {
-            for x in 0..width {
-                let indicies = spatial_hash.get_indexes_by_cell(uvec2(x, y));
-                let other_indicies = []
-                    .into_iter()
-                    .chain(if x < width - 1 {
-                        Some((x + 1, y))
-                    } else {
-                        None
-                    })
-                    .chain(if x > 0 && y < height - 1 {
-                        Some((x - 1, y + 1))
-                    } else {
-                        None
-                    })
-                    .chain(if y < height - 1 {
-                        Some((x, y + 1))
-                    } else {
-                        None
-                    })
-                    .chain(if x < width - 1 && y < height - 1 {
-                        Some((x + 1, y + 1))
-                    } else {
-                        None
-                    })
-                    .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(uvec2(xx, yy)));
+            Self::run_row_collision(y, width, height, spatial_hash, data_ptr, dt);
+        }
+    }
 
-                Self::run_cell_collisions(indicies, other_indicies, data_ptr, dt);
-            }
+    fn run_row_collision(
+        y: u32,
+        width: u32,
+        height: u32,
+        spatial_hash: &PointerHash<FixedSizeGrid>,
+        data_ptr: *mut Particle,
+        dt: f32,
+    ) {
+        for x in 0..width {
+            let indicies = spatial_hash.get_indexes_by_cell(uvec2(x, y));
+            let other_indicies = []
+                .into_iter()
+                .chain(if x < width - 1 {
+                    Some((x + 1, y))
+                } else {
+                    None
+                })
+                .chain(if x > 0 && y < height - 1 {
+                    Some((x - 1, y + 1))
+                } else {
+                    None
+                })
+                .chain(if y < height - 1 {
+                    Some((x, y + 1))
+                } else {
+                    None
+                })
+                .chain(if x < width - 1 && y < height - 1 {
+                    Some((x + 1, y + 1))
+                } else {
+                    None
+                })
+                .flat_map(|(xx, yy)| spatial_hash.get_indexes_by_cell(uvec2(xx, yy)));
+
+            Self::run_cell_collisions(indicies, other_indicies, data_ptr, dt);
         }
     }
 
