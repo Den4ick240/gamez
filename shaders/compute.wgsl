@@ -92,6 +92,20 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
             particles[i].position = normalize(direction) * max_length;
         }
 
+        for (var j = 0u; j < simulation.spawned_particles; j = j + 1u) {
+            if i == j {
+              continue;
+            }
+            var direction = particles[i].position - particles[j].position;
+            var distance = length(direction);
+            if distance < particles[i].radius + particles[j].radius {
+                var normal = normalize(direction);
+                var penetration = (particles[i].radius + particles[j].radius - distance) / 2.0;
+                particles[i].position += normal * penetration;
+                particles[j].position -= normal * penetration;
+            }
+        }
+
         particles[i].velocity = (particles[i].position - particles[i].velocity) / simulation.dt;
         
         //var velocity = particles[i].velocity;

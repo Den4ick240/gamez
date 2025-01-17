@@ -251,10 +251,13 @@ impl Simulation {
     }
 
     pub fn update(&mut self, dt: f32, profiler: &mut super::profiler::Profiler) {
-        self.spawned_particles = (self.update_count / 2).min(COUNT as u64) as u32;
+        self.spawned_particles = (self.update_count / 4).min(COUNT as u64) as u32;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        let substeps = 20;
+        let dt = dt / substeps as f32;
 
         self.simulation_uniform.update(
             &self.device,
@@ -265,7 +268,7 @@ impl Simulation {
             dt,
         );
 
-        {
+        for _ in 0..substeps {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Compute pass"),
                 timestamp_writes: None,
