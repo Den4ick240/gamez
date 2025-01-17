@@ -7,6 +7,7 @@ struct Camera {
 @group(0) @binding(0)
 var<uniform> camera: Camera;
 
+
 struct Input {
   @location(0) position: vec2<f32>,
 }
@@ -64,10 +65,38 @@ fn fs_particles(input: Output) -> @location(0) vec4<f32> {
 @group(0) @binding(0) 
 var<storage, read_write> particles:  array<InstanceInput>;
 
+struct Simulation {
+  spawned_particles: u32,
+  dt: f32,
+  bound_radius: f32,
+}
+
+@group(0) @binding(1)
+var<uniform> simulation: Simulation;
+
 @compute @workgroup_size(1)
 fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if global_id.x == 0 && global_id.y == 0 && global_id.z == 0 {
-        particles[0].position.y = particles[0].position.y - 0.1;
+    if global_id.x < simulation.spawned_particles && global_id.y == 0 && global_id.z == 0 {
+        var gravity = vec2<f32>(0.0, -9.8);
+        var i = global_id.x;
+        var velocity = particles[i].velocity + gravity * simulation.dt;
+        particles[i].velocity = particles[i].position;
+        particles[i].position += velocity * simulation.dt;
+
+        var bound_radius = simulation.bound_radius;
+        var max_length = bound_radius - particles[i].radius;
+
+        var direction = particles[i].position;
+        var distance = length(direction);
+        if distance > max_length {
+            particles[i].position = normalize(direction) * max_length;
+        }
+
+        particles[i].velocity = (particles[i].position - particles[i].velocity) / simulation.dt;
+        
+        //var velocity = particles[i].velocity;
+        //particles[i].velocity = particles[i].position;
+        //particles[i].position.y = particles[i].position.y - 0.1;
     }
 }
 

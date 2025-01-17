@@ -1,7 +1,11 @@
+mod simulation_uniform;
 use std::mem;
 
-use egui::Vec2;
-use glam::Vec3;
+use egui::{vec2, Vec2};
+use glam::{vec3, Vec3};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
+use simulation_uniform::SimulationUniform;
 use wgpu::util::{DeviceExt, RenderEncoder};
 use winit::{dpi::PhysicalSize, event_loop::EventLoopProxy};
 
@@ -14,12 +18,19 @@ use super::{
 };
 use bytemuck::{Pod, Zeroable};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub struct Color {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct Particle {
     pub color: Vec3,
     pub radius: f32,
-    pub positon: Vec2,
+    pub position: Vec2,
     pub velocity: Vec2,
 }
 
@@ -46,18 +57,21 @@ pub struct Simulation {
     main_bind_group: wgpu::BindGroup,
     shader_module: wgpu::ShaderModule,
     particles: [Particle; COUNT],
-    spawned_particles: usize,
+    spawned_particles: u32,
     instance_buffer: wgpu::Buffer,
     render_pipeline: wgpu::RenderPipeline,
     compute_pipeline: wgpu::ComputePipeline,
     compute_bind_group: wgpu::BindGroup,
     compute_bind_group_layout: wgpu::BindGroupLayout,
+    simulation_uniform: SimulationUniform,
+    update_count: u64,
 }
 
-const COUNT: usize = 1;
+const COUNT: usize = 10000;
+const MAX_PARTICLE_RADIUS: f32 = 0.2;
 const SHADER_FILE: &'static str = "shaders/compute.wgsl";
 
-const BOUND_RADIUS: u32 = 100;
+const BOUND_RADIUS: u32 = 10;
 const FOV: f32 = BOUND_RADIUS as f32 * 2.0;
 
 fn get_particle_buffer_size() -> wgpu::BufferAddress {
@@ -122,24 +136,25 @@ impl Simulation {
 
         let square_mesh = SquareMesh::new(&device);
 
-        let particles = [Particle {
-            color: Vec3::new(1.0, 0.0, 0.0),
-            radius: 4.0,
-            positon: Vec2::new(1.0, 0.0),
-            velocity: Vec2::new(2.0, 0.0),
-        }; COUNT];
+        let seed: [u8; 32] = [
+            1u8, 2u8, 3u8, 4u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+        ];
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let particles = core::array::from_fn(|_| Particle {
+            color: rng.get_random_color().into(),
+            position: vec2(-5.0, 5.0),
+            velocity: vec2(10.0, 0.0),
+            radius: rng.get_random_size(),
+        });
 
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("SimulationInstanceBuffer"),
             contents: bytemuck::cast_slice(&particles),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
         });
-        // let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        //     label: Some("SimulationInstanceBuffer"),
-        //     size: get_particle_buffer_size(),
-        //     usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        //     mapped_at_creation: false,
-        // });
+
+        let simulation_uniform = SimulationUniform::new(&device);
 
         let main_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -158,16 +173,28 @@ impl Simulation {
         let compute_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("ComputeBindGroupLayout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
             });
 
         let main_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -181,10 +208,16 @@ impl Simulation {
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ComputeBindGroup"),
             layout: &compute_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: instance_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: instance_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: simulation_uniform.get_binding_resource(),
+                },
+            ],
         });
 
         let (render_pipeline, compute_pipeline) = create_pipeline(
@@ -212,10 +245,38 @@ impl Simulation {
             compute_pipeline,
             compute_bind_group,
             compute_bind_group_layout,
+            simulation_uniform,
+            update_count: 0,
         }
     }
 
-    pub fn update(&self, dt: f32, profiler: &mut super::profiler::Profiler) {}
+    pub fn update(&mut self, dt: f32, profiler: &mut super::profiler::Profiler) {
+        self.spawned_particles = (self.update_count / 2).min(COUNT as u64) as u32;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        self.simulation_uniform.update(
+            &self.device,
+            &mut encoder,
+            &self.queue,
+            self.spawned_particles as u32,
+            BOUND_RADIUS as f32,
+            dt,
+        );
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+            compute_pass.dispatch_workgroups(self.spawned_particles as u32, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.update_count += 1;
+    }
 
     pub fn on_resize(&mut self, size: PhysicalSize<u32>) {
         self.surface_config.width = size.width;
@@ -233,21 +294,6 @@ impl Simulation {
         let surface_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Compute pass"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&self.compute_pipeline);
-            compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
-            compute_pass.dispatch_workgroups(1, 1, 1);
-        }
-        self.queue.submit(std::iter::once(encoder.finish()));
 
         let mut encoder = self
             .device
@@ -374,4 +420,89 @@ fn create_pipeline(
         cache: None,
     });
     (render, compute)
+}
+
+trait MyRng {
+    fn get_random_size(&mut self) -> f32;
+
+    fn get_random_color(&mut self) -> Color;
+}
+
+impl MyRng for StdRng {
+    fn get_random_size(&mut self) -> f32 {
+        self.gen_range(0.7..=1.0) * MAX_PARTICLE_RADIUS
+    }
+
+    fn get_random_color(&mut self) -> Color {
+        let colors = [
+            Color {
+                r: 0.945,
+                g: 0.769,
+                b: 0.058,
+            }, // Vibrant Yellow
+            Color {
+                r: 0.204,
+                g: 0.596,
+                b: 0.859,
+            }, // Sky Blue
+            Color {
+                r: 0.608,
+                g: 0.349,
+                b: 0.714,
+            }, // Soft Purple
+            Color {
+                r: 0.231,
+                g: 0.764,
+                b: 0.392,
+            }, // Fresh Green
+            Color {
+                r: 0.937,
+                g: 0.325,
+                b: 0.314,
+            }, // Coral Red
+            Color {
+                r: 0.180,
+                g: 0.800,
+                b: 0.443,
+            }, // Mint Green
+            Color {
+                r: 0.996,
+                g: 0.780,
+                b: 0.345,
+            }, // Soft Orange
+            Color {
+                r: 0.556,
+                g: 0.267,
+                b: 0.678,
+            }, // Deep Violet
+            Color {
+                r: 0.870,
+                g: 0.490,
+                b: 0.847,
+            }, // Lavender Pink
+            Color {
+                r: 0.529,
+                g: 0.808,
+                b: 0.922,
+            }, // Light Blue
+            Color {
+                r: 0.996,
+                g: 0.921,
+                b: 0.545,
+            }, // Pa.s.tel Yellow
+            Color {
+                r: 0.835,
+                g: 0.625,
+                b: 0.459,
+            }, // Warm Beige
+        ];
+
+        colors[self.gen_range(0..colors.len())]
+    }
+}
+
+impl Into<Vec3> for Color {
+    fn into(self) -> Vec3 {
+        vec3(self.r, self.g, self.b)
+    }
 }
