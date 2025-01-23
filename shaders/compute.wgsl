@@ -88,11 +88,13 @@ struct Sort {
 @group(0) @binding(3)
 var <uniform> sort: Sort;
 
+fn get_cell_index(position: vec2<f32>) -> u32 {
+    var pos = vec2<u32>((position - sort.origin) / sort.cell_size);
+    return pos.x + pos.y * sort.grid_size.x;
+}
+
 fn get_particle_color(i: u32) -> vec3<f32> {
-    let position = particles[i].position;
-    let pos = vec2<u32>((position - sort.origin) / sort.cell_size);
-    let col = vec2<f32>(pos) / vec2<f32>(sort.grid_size);
-    return vec3<f32>(col, 0.0);
+    return vec3<f32>(f32(get_cell_index(particles[i].position)) / f32(sort.grid_size.x * sort.grid_size.y), 0.0, 0.0);
 }
 
 
