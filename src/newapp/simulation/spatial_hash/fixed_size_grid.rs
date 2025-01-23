@@ -6,9 +6,9 @@ use super::SpatialGrid;
 
 #[derive(Debug, Clone)]
 pub struct FixedSizeGrid {
-    origin: Vec2,
-    size: UVec2,
-    cell_size: Vec2,
+    pub origin: Vec2,
+    pub size: UVec2,
+    pub cell_size: Vec2,
 }
 
 impl FixedSizeGrid {

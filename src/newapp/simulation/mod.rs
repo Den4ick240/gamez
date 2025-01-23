@@ -1,7 +1,7 @@
-mod box_constraint;
+pub mod box_constraint;
 mod integrator;
 mod sorted_store;
-mod spatial_hash;
+pub mod spatial_hash;
 
 use std::{
     f32::consts::PI,

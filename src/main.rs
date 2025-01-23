@@ -11,6 +11,7 @@ mod newapp;
 // mod square_mesh;
 // mod timer;
 // mod wgpu_utils;
+mod rand;
 
 use newapp::application_handler::Event;
 use winit::event_loop::{ControlFlow, EventLoop};
