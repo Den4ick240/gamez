@@ -75,7 +75,7 @@ pub struct Simulation {
 }
 
 const GROUP_SIZE: usize = 256;
-const COUNT: usize = 1 << 12;
+const COUNT: usize = 1 << 3;
 const MAX_PARTICLE_RADIUS: f32 = 0.2;
 const SHADER_FILE: &'static str = "shaders/compute.wgsl";
 
@@ -153,13 +153,26 @@ impl Simulation {
                 radius: 0.0,
             }; COUNT],
         );
+        let grid = FixedSizeGrid::new(
+            MAX_PARTICLE_RADIUS,
+            BoxConstraint::around_center(BOUND_RADIUS as f32),
+        );
         for (i, particle) in particles.as_mut().iter_mut().enumerate() {
+            let i = COUNT - i - 1;
             *particle = Particle {
                 color: vec3(1.0, 1.0, 0.0),
                 // color: vec3(1.0, 1.0, 1.0) * i as f32 / COUNT as f32,
                 // color: rng.get_random_color().into(),
                 //
-                position: vec2(-5.0 + i as f32 * 0.1, 5.0 + rng.get_random_size(0.1..0.6)),
+                // position: vec2(-5.0 + i as f32 * 0.1, 5.0 + rng.get_random_size(0.1..0.6)),
+                position: vec2(
+                    (((i % grid.size.x as usize) as f32) * MAX_PARTICLE_RADIUS as f32 * 2.0)
+                        + grid.origin.x
+                        - MAX_PARTICLE_RADIUS,
+                    (((i / grid.size.y as usize) as f32) * MAX_PARTICLE_RADIUS as f32 * 2.0)
+                        + grid.origin.y
+                        - MAX_PARTICLE_RADIUS,
+                ),
                 velocity: vec2(10.0, 0.0),
                 // radius: rng.get_random_size(0.7..=1.0) * MAX_PARTICLE_RADIUS,
                 radius: MAX_PARTICLE_RADIUS,
@@ -176,10 +189,6 @@ impl Simulation {
             contents: bytemuck::cast_slice(&[0u32; (BOUND_RADIUS * BOUND_RADIUS * 4) as usize]),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        let grid = FixedSizeGrid::new(
-            MAX_PARTICLE_RADIUS,
-            BoxConstraint::around_center(BOUND_RADIUS as f32),
-        );
         let sort_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("SortBuffer"),
             contents: bytemuck::cast_slice(&[Sort {

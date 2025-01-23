@@ -42,14 +42,15 @@ fn to_camera_pos(world_pos: vec2<f32>) -> vec2<f32> {
 
 
 @vertex
-fn vs_particles(input: Input, instance: InstanceInput) -> Output {
+fn vs_particles(input: Input, instance: InstanceInput, @builtin(instance_index) i: u32) -> Output {
     var radius = instance.radius;
     var world_pos = instance.position + input.position * radius;
     var camera_pos = to_camera_pos(world_pos);
     var out: Output;
     out.clip_position = vec4<f32>(camera_pos.xy, 0.0, 1.0);
     out.pos = input.position;
-    out.color = instance.color;
+    //out.color = instance.color;
+    out.color = vec3<f32>(1.0, 0.0, 0.0) * f32(i) / 8;
     return out;
 }
 
@@ -93,17 +94,27 @@ fn get_cell_index(position: vec2<f32>) -> u32 {
     return pos.x + pos.y * sort.grid_size.x;
 }
 
-fn get_particle_color(i: u32) -> vec3<f32> {
-    return vec3<f32>(f32(get_cell_index(particles[i].position)) / f32(sort.grid_size.x * sort.grid_size.y), 0.0, 0.0);
+fn compare_and_swap(i1: u32, i2: u32) {
+    if get_cell_index(particles[i1].position) > get_cell_index(particles[i2].position) {
+        var tmp = particles[i1];
+        particles[i1] = particles[i2];
+        particles[i2] = tmp;
+    }
 }
 
+fn do_flip(i: u32, h: u32) {
+    let i1 = i * 2;
+    let i2 = i1 + 1;
+    compare_and_swap(i1, i2);
+}
 
 @compute @workgroup_size(256)
 fn sort_particles_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var i = global_id.x;
     if i * 2 < sort.sorting_length {
-        particles[i * 2].color = get_particle_color(i * 2);
-        particles[i * 2 + 1].color = get_particle_color(i * 2 + 1);
+        for (var h = 0u; h < 10; h = h + 1u) {
+            do_flip(i, 2u);
+        }
     }
 }
 
@@ -194,7 +205,7 @@ fn integrate(i: u32) {
     var gravity = vec2<f32>(0.0, -9.8);
     var velocity = particles[i].velocity_or_previous_position + gravity * simulation.dt;
     particles[i].velocity_or_previous_position = particles[i].position;
-    particles[i].position += velocity * simulation.dt;
+    //particles[i].position += velocity * simulation.dt;
 } 
 
 @compute @workgroup_size(256)
