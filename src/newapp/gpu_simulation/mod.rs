@@ -72,14 +72,16 @@ pub struct Simulation {
     update_count: u64,
     grid_buffer: wgpu::Buffer,
     sort_buffer: wgpu::Buffer,
+    grid: FixedSizeGrid,
 }
 
-const GROUP_SIZE: usize = 256;
-const COUNT: usize = 1 << 3;
-const MAX_PARTICLE_RADIUS: f32 = 0.2;
+const GROUP_SIZE: u32 = 256;
+const GRID_GROUP_SIZE: u32 = 16;
+const COUNT: usize = 1 << 9;
+const MAX_PARTICLE_RADIUS: f32 = 0.4;
 const SHADER_FILE: &'static str = "shaders/compute.wgsl";
 
-const BOUND_RADIUS: u32 = 10;
+const BOUND_RADIUS: u32 = 40;
 const FOV: f32 = BOUND_RADIUS as f32 * 2.0;
 
 fn get_particle_buffer_size() -> wgpu::BufferAddress {
@@ -154,7 +156,7 @@ impl Simulation {
             }; COUNT],
         );
         let grid = FixedSizeGrid::new(
-            MAX_PARTICLE_RADIUS,
+            MAX_PARTICLE_RADIUS * 2.0,
             BoxConstraint::around_center(BOUND_RADIUS as f32),
         );
         for (i, particle) in particles.as_mut().iter_mut().enumerate() {
@@ -164,16 +166,16 @@ impl Simulation {
                 // color: vec3(1.0, 1.0, 1.0) * i as f32 / COUNT as f32,
                 // color: rng.get_random_color().into(),
                 //
-                // position: vec2(-5.0 + i as f32 * 0.1, 5.0 + rng.get_random_size(0.1..0.6)),
-                position: vec2(
-                    (((i % grid.size.x as usize) as f32) * MAX_PARTICLE_RADIUS as f32 * 2.0)
-                        + grid.origin.x
-                        - MAX_PARTICLE_RADIUS,
-                    (((i / grid.size.y as usize) as f32) * MAX_PARTICLE_RADIUS as f32 * 2.0)
-                        + grid.origin.y
-                        - MAX_PARTICLE_RADIUS,
-                ),
-                velocity: vec2(10.0, 0.0),
+                position: vec2(-5.0 + i as f32 * 0.1, 5.0 + rng.get_random_size(0.1..0.6)),
+                // position: vec2(
+                //     (((i % grid.size.x as usize) as f32) * MAX_PARTICLE_RADIUS as f32 * 2.0)
+                //         + grid.origin.x
+                //         + MAX_PARTICLE_RADIUS,
+                //     (((i / grid.size.y as usize) as f32) * MAX_PARTICLE_RADIUS as f32 * 2.0)
+                //         + grid.origin.y
+                //         + MAX_PARTICLE_RADIUS,
+                // ),
+                velocity: vec2(00.0, 0.0),
                 // radius: rng.get_random_size(0.7..=1.0) * MAX_PARTICLE_RADIUS,
                 radius: MAX_PARTICLE_RADIUS,
             };
@@ -184,10 +186,12 @@ impl Simulation {
             contents: bytemuck::cast_slice(particles.as_ref()),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
         });
-        let grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let grid_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("GridBuffer"),
-            contents: bytemuck::cast_slice(&[0u32; (BOUND_RADIUS * BOUND_RADIUS * 4) as usize]),
+            // contents: bytemuck::cast_slice(&[0u32; (grid.size.x * grid.size.y) as usize]),
             usage: wgpu::BufferUsages::STORAGE,
+            size: (4 * grid.size.x * grid.size.y) as u64,
+            mapped_at_creation: false,
         });
         let sort_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("SortBuffer"),
@@ -304,6 +308,7 @@ impl Simulation {
         );
 
         Self {
+            grid,
             surface,
             shader_module,
             square_mesh,
@@ -354,11 +359,7 @@ impl Simulation {
                 });
                 compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
                 compute_pass.set_pipeline(&self.compute_pipeline.update);
-                compute_pass.dispatch_workgroups(
-                    self.spawned_particles.div_ceil(GROUP_SIZE as u32),
-                    1,
-                    1,
-                );
+                compute_pass.dispatch_workgroups(self.spawned_particles.div_ceil(GROUP_SIZE), 1, 1);
                 drop(compute_pass);
                 if self.update_count % 1 == 0 && s == 0 {
                     self.queue.submit(std::iter::once(encoder.finish()));
@@ -373,8 +374,47 @@ impl Simulation {
                     compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
                     compute_pass.set_pipeline(&self.compute_pipeline.sort);
                     compute_pass.dispatch_workgroups(
-                        self.spawned_particles.div_ceil(GROUP_SIZE as u32 * 2),
+                        self.spawned_particles.div_ceil(GROUP_SIZE * 2),
                         1,
+                        1,
+                    );
+                    drop(compute_pass);
+                    let mut compute_pass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Compute pass"),
+                            timestamp_writes: None,
+                        });
+                    compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                    compute_pass.set_pipeline(&self.compute_pipeline.clear_grid);
+                    compute_pass.dispatch_workgroups(
+                        self.grid.size.x.div_ceil(GRID_GROUP_SIZE),
+                        self.grid.size.y.div_ceil(GRID_GROUP_SIZE),
+                        1,
+                    );
+                    drop(compute_pass);
+                    let mut compute_pass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Compute pass"),
+                            timestamp_writes: None,
+                        });
+                    compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                    compute_pass.set_pipeline(&self.compute_pipeline.fill_grid);
+                    compute_pass.dispatch_workgroups(
+                        self.spawned_particles.div_ceil(GROUP_SIZE),
+                        1,
+                        1,
+                    );
+                    drop(compute_pass);
+                    let mut compute_pass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Compute pass"),
+                            timestamp_writes: None,
+                        });
+                    compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                    compute_pass.set_pipeline(&self.compute_pipeline.colorize_grid);
+                    compute_pass.dispatch_workgroups(
+                        self.grid.size.x.div_ceil(GRID_GROUP_SIZE),
+                        self.grid.size.y.div_ceil(GRID_GROUP_SIZE),
                         1,
                     );
                     drop(compute_pass);
@@ -389,11 +429,7 @@ impl Simulation {
                 });
                 compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
                 compute_pass.set_pipeline(&self.compute_pipeline.collide);
-                compute_pass.dispatch_workgroups(
-                    self.spawned_particles.div_ceil(GROUP_SIZE as u32),
-                    1,
-                    1,
-                );
+                compute_pass.dispatch_workgroups(self.spawned_particles.div_ceil(GROUP_SIZE), 1, 1);
                 drop(compute_pass);
                 let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Compute pass"),
@@ -401,11 +437,7 @@ impl Simulation {
                 });
                 compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
                 compute_pass.set_pipeline(&self.compute_pipeline.finalize);
-                compute_pass.dispatch_workgroups(
-                    self.spawned_particles.div_ceil(GROUP_SIZE as u32),
-                    1,
-                    1,
-                );
+                compute_pass.dispatch_workgroups(self.spawned_particles.div_ceil(GROUP_SIZE), 1, 1);
                 drop(compute_pass);
             }
         }
@@ -548,9 +580,12 @@ fn create_pipeline(
         cache: None,
     });
 
-    let [update, sort, collide, finalize] = [
+    let [update, sort, clear_grid, fill_grid, colorize_grid, collide, finalize] = [
         "update_entry",
         "sort_particles_entry",
+        "clear_grid_entry",
+        "fill_grid_entry",
+        "colorize_grid_entry",
         "naive_collisions_entry",
         "finalize_speed_entry",
     ]
@@ -569,6 +604,9 @@ fn create_pipeline(
         ComputePipeline {
             update,
             sort,
+            clear_grid,
+            colorize_grid,
+            fill_grid,
             collide,
             finalize,
         },
@@ -578,6 +616,9 @@ fn create_pipeline(
 struct ComputePipeline {
     pub update: wgpu::ComputePipeline,
     pub collide: wgpu::ComputePipeline,
+    pub clear_grid: wgpu::ComputePipeline,
+    pub fill_grid: wgpu::ComputePipeline,
+    pub colorize_grid: wgpu::ComputePipeline,
     pub finalize: wgpu::ComputePipeline,
-    sort: wgpu::ComputePipeline,
+    pub sort: wgpu::ComputePipeline,
 }

@@ -49,8 +49,14 @@ fn vs_particles(input: Input, instance: InstanceInput, @builtin(instance_index) 
     var out: Output;
     out.clip_position = vec4<f32>(camera_pos.xy, 0.0, 1.0);
     out.pos = input.position;
-    //out.color = instance.color;
-    out.color = vec3<f32>(1.0, 0.0, 0.0) * f32(i) / 8;
+    out.color = instance.color;
+    //out.color = vec3<f32>(1.0, 0.0, 0.0) * f32(i) / 256;
+    //if i == 0 {
+    //    out.color = vec3<f32>(0.0, 1.0, 1.0);
+    //}
+    //if i == 7 {
+    //    out.color = vec3<f32>(1.0, 1.0, 1.0);
+    //}
     return out;
 }
 
@@ -103,8 +109,18 @@ fn compare_and_swap(i1: u32, i2: u32) {
 }
 
 fn do_flip(i: u32, h: u32) {
-    let i1 = i * 2;
-    let i2 = i1 + 1;
+    let offset = ((i * 2) / h) * h;
+    let imh = (i) % (h / 2);
+    let i1 = offset + imh;
+    let i2 = offset + h - imh - 1;
+    compare_and_swap(i1, i2);
+}
+
+fn do_disperse(i: u32, h: u32) {
+    let offset = ((i * 2) / h) * h;
+    let imh = (i) % (h / 2);
+    let i1 = offset + imh;
+    let i2 = offset + imh + (h / 2);
     compare_and_swap(i1, i2);
 }
 
@@ -112,8 +128,71 @@ fn do_flip(i: u32, h: u32) {
 fn sort_particles_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var i = global_id.x;
     if i * 2 < sort.sorting_length {
-        for (var h = 0u; h < 10; h = h + 1u) {
-            do_flip(i, 2u);
+        for (var h = 2u; h <= sort.sorting_length; h = h * 2u) {
+            if h != 2u {
+                storageBarrier();
+            }
+            do_flip(i, h);
+            for (var hh = h / 2u; hh >= 2; hh = hh / 2u) {
+                storageBarrier();
+                do_disperse(i, hh);
+            }
+        }
+    }
+}
+
+
+@compute
+@workgroup_size(16, 16)
+fn clear_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let cell = global_id.xy;
+    if cell.x < sort.grid_size.x && cell.y < sort.grid_size.y {
+        grid[cell.x + cell.y * sort.grid_size.x] = 0xffffffffu;
+    }
+}
+
+@compute
+@workgroup_size(16, 16)
+fn collide_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
+}
+
+@compute
+@workgroup_size(256)
+fn fill_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var i = global_id.x;
+    if i < sort.sorting_length {
+        if i == 0 {
+            grid[get_cell_index(particles[0].position)] = 0u;
+        } else {
+            let i1 = i -1;
+            let i2 = i;
+
+            let cell1 = get_cell_index(particles[i1].position);
+            let cell2 = get_cell_index(particles[i2].position);
+            if cell1 != cell2 {
+                grid[cell2] = i2;
+            }
+        }
+    }
+}
+
+@compute
+@workgroup_size(16, 16)
+fn colorize_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let cell = global_id.xy;
+    if cell.x < sort.grid_size.x && cell.y < sort.grid_size.y {
+        let cell_index = cell.x + cell.y * sort.grid_size.x;
+        var i = grid[cell_index];
+        if i == 0xffffffffu {
+            return;
+        }
+        loop {
+            particles[i].color = vec3<f32>(vec2<f32>(cell) / vec2<f32>(sort.grid_size), 0.0);
+            if get_cell_index(particles[i + 1].position) == cell_index {
+                i = i + 1u;
+            } else {
+                break;
+            }
         }
     }
 }
@@ -181,11 +260,15 @@ fn naive_collisions(i: u32) {
         }
         var direction = particles[i].position - particles[j].position;
         var distance = length(direction);
+        if distance == 0.0 {
+            direction = vec2<f32>(0.001, 0.0);
+            distance = 0.001;
+        }
         if distance < particles[i].radius + particles[j].radius {
-            var normal = normalize(direction);
+            var normal = direction / distance;
             var penetration = (particles[i].radius + particles[j].radius - distance) / 2.0;
             particles[i].position += normal * penetration;
-                //particles[j].position -= normal * penetration;
+            particles[j].position -= normal * penetration;
         }
     }
 }
@@ -205,7 +288,7 @@ fn integrate(i: u32) {
     var gravity = vec2<f32>(0.0, -9.8);
     var velocity = particles[i].velocity_or_previous_position + gravity * simulation.dt;
     particles[i].velocity_or_previous_position = particles[i].position;
-    //particles[i].position += velocity * simulation.dt;
+    particles[i].position += velocity * simulation.dt;
 } 
 
 @compute @workgroup_size(256)
