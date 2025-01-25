@@ -7,7 +7,6 @@ struct Camera {
 @group(0) @binding(0)
 var<uniform> camera: Camera;
 
-
 struct Input {
   @location(0) position: vec2<f32>,
 }
@@ -152,28 +151,92 @@ fn clear_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute
-@workgroup_size(16, 16)
+@workgroup_size(32, 8)
 fn collide_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell = vec2<u32>(global_id.x * 3, global_id.y * 2);
     if cell.x >= sort.grid_size.x || cell.y >= sort.grid_size.y {
         return;
     }
     collide_cell(cell);
-//    storageBarrier();
-//    collide_cell(cell + vec2<u32>(1, 0));
-//    storageBarrier();
-//    collide_cell(cell + vec2<u32>(2, 0));
-//    storageBarrier();
-//    collide_cell(cell + vec2<u32>(0, 1));
-//    storageBarrier();
-//    collide_cell(cell + vec2<u32>(1, 1));
-//    storageBarrier();
-//    collide_cell(cell + vec2<u32>(2, 1));
+    //storageBarrier();
+    collide_cell(cell + vec2<u32>(1, 0));
+    //storageBarrier();
+    collide_cell(cell + vec2<u32>(2, 0));
+    //storageBarrier();
+    collide_cell(cell + vec2<u32>(0, 1));
+    //storageBarrier();
+    collide_cell(cell + vec2<u32>(1, 1));
+    //storageBarrier();
+    collide_cell(cell + vec2<u32>(2, 1));
 }
 
 const EmptyCell = 0xffffffffu;
 
 fn collide_cell(cell: vec2<u32>) {
+    let n_particles = simulation.spawned_particles;
+    let grid_size = sort.grid_size;
+    let main_cell_index = cell.x + cell.y * grid_size.x;
+    var main_start = grid[main_cell_index];
+    if main_start == EmptyCell {
+        return;
+    }
+    let end_offset = u32(cell.x + 1 < grid_size.x);
+    let right_cell_index = main_cell_index + end_offset;
+    var main_end = main_start;
+    var right_end = main_start;
+
+    loop {
+        let next = right_end + 1;
+        if next >= n_particles {
+            break;
+        }
+        let next_cell_index = get_cell_index(particles[next].position);
+        if next_cell_index > right_cell_index {
+            break;
+        }
+        right_end = next;
+        if next_cell_index == main_cell_index {
+            main_end = next;
+        }
+    }
+
+    for (var i = main_start; i <= main_end; i += 1u) {
+        for (var j = i + 1u; j <= right_end; j += 1u) {
+            collide(i, j);
+        }
+    }
+
+    if cell.y + 1 >= grid_size.y {
+        return;
+    }
+
+    
+    //let bottom_row_index=  
+    //let bottom_start_cell_index = 
+    //var bottom_start = 
+
+
+
+
+    let bottom_row_index = grid_size.x * (1 + cell.y);
+    var bottom_start_cell_index = bottom_row_index + cell.x - u32(cell.x > 0);
+    let bottom_end_cell_index = bottom_row_index + cell.x + end_offset;
+    var bottom_start = grid[bottom_start_cell_index];
+    while bottom_start == EmptyCell {
+        if bottom_start_cell_index >= bottom_end_cell_index {
+            return;
+        }
+        bottom_start_cell_index += 1u;
+        bottom_start = grid[bottom_start_cell_index];
+    }
+    var bottom_end = bottom_start;
+    while bottom_end + 1 < n_particles && get_cell_index(particles[bottom_end + 1].position) <= bottom_end_cell_index {
+        bottom_end += 1u;
+    }
+    // let bo
+}
+
+fn _collide_cell(cell: vec2<u32>) {
     let n_particles = simulation.spawned_particles;
     let grid_size = sort.grid_size;
     let main_cell_index = cell.x + cell.y * grid_size.x;
@@ -193,27 +256,24 @@ fn collide_cell(cell: vec2<u32>) {
     var bottom_start_x: u32;
     var bottom_end_x = cell.x + x_end_offset;
     if cell.x > 0 {
-        botom_start = cell.x - 1u;
+        bottom_start_x = cell.x - 1u;
     } else {
-        bottom_start = 0u;
+        bottom_start_x = 0u;
     }
     var bottom_row = grid_size.x * (cell.y + 1);
     var bottom_start_cell_index = bottom_row + bottom_start_x;
-    var bottom_end_cell_index = bottom_row + bottom_end;
+    var bottom_end_cell_index = bottom_row + bottom_end_x;
 
     loop {
-        let j = i + 1;
         for (var j = i + 1; j < n_particles && get_cell_index(particles[j].position) <= right_cell_index; j += 1u) {
             collide(i, j);
         }
 
         if cell.y + 1 < grid_size.y {
-            for (let j_cell_index = bottom_start_cell_index; j_cell_index < bottom_end_cell_index; j_cell_index += 1u) {
-                let j = grid[j_cell_index];
-                if j != EmptyCell {
-                    for (; j < n_particles && get_cell_index(particles[j].position) == j_cell_index; j += 1u) {
-                        collide(i, j);
-                    }
+            for (var j_cell_index = bottom_start_cell_index; j_cell_index <= bottom_end_cell_index; j_cell_index += 1u) {
+                var j = grid[j_cell_index];
+                for (; j < n_particles && get_cell_index(particles[j].position) == j_cell_index; j += 1u) {
+                    collide(i, j);
                 }
             }
         }
@@ -223,54 +283,6 @@ fn collide_cell(cell: vec2<u32>) {
             return;
         }
     }
-  //let cell_index = cell.x + cell.y * sort.grid_size.x;
-    //var i = grid[cell_index];
-    //if i == 0xffffffffu {
-    //    return;
-    //}
-    //var end_offset: u32 = 0;
-    //if cell.x + 1 < sort.grid_size.x {
-    //    end_offset = 1u;
-    //} else {
-    //    end_offset = 0u;
-    //}
-
-    //var low_end_offset: u32 = 0;
-    //var low_x_start: u32 = 0;
-    //if cell.x > 0 {
-    //    low_end_offset = end_offset + 1;
-    //    low_x_start = cell.x - 1;
-    //} else {
-    //    low_end_offset = end_offset;
-    //    low_x_start = 0u;
-    //}
-
-    //loop {
-    //    var j = i + 1;
-    //    var j_cell_index = get_cell_index(particles[j].position);
-    //    while j_cell_index <= cell_index + end_offset {
-    //        collide(i, j);
-    //        j = j + 1;
-    //        j_cell_index = get_cell_index(particles[j].position);
-    //    }
-
-    //    if sort.grid_size.y > cell.y + 1 {
-    //        var j_start_cell_index = sort.grid_size.x * (cell.y + 1) + low_x_start;
-    //        var j_cell_index = j_start_cell_index;
-    //        var j = grid[j_cell_index];
-    //        while j_cell_index <= j_start_cell_index + low_end_offset {
-    //            collide(i, j);
-    //            j = j + 1;
-    //            j_cell_index = get_cell_index(particles[j].position);
-    //        }
-    //    }
-
-    //    if get_cell_index(particles[i + 1].position) == cell_index {
-    //        i = i + 1u;
-    //    } else {
-    //            break;
-    //    }
-    //}
 }
 
 @compute
@@ -379,9 +391,7 @@ fn naive_collisions(i: u32) {
     }
 }
 
-@compute @workgroup_size(256)
-fn finalize_speed_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
-fn collide(i,:, u32, j, : u32) {
+fn collide(i: u32, j: u32) {
     var direction = particles[i].position - particles[j].position;
     var distance = length(direction);
     if distance == 0.0 {
@@ -396,6 +406,8 @@ fn collide(i,:, u32, j, : u32) {
     }
 }
 
+@compute @workgroup_size(256)
+fn finalize_speed_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var i = global_id.x;
     if i < simulation.spawned_particles {
         finalize_speed(i);
@@ -407,7 +419,7 @@ fn finalize_speed(i: u32) {
     let speed = length(velocity);
     if speed != 0.0 {
         velocity = velocity / speed;
-        velocity = velocity * min(speed, 5.0);
+        velocity = velocity * min(speed, 20.0);
     }
     particles[i].velocity_or_previous_position = velocity;
 }
