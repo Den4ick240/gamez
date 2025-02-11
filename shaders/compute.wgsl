@@ -48,7 +48,10 @@ fn vs_particles(input: Input, instance: InstanceInput, @builtin(instance_index) 
     var out: Output;
     out.clip_position = vec4<f32>(camera_pos.xy, 0.0, 1.0);
     out.pos = input.position;
-    out.color = instance.color;
+    //out.color = instance.color;
+    let v = length(instance.velocity_or_previous_position);
+    let f = 3.0;
+    out.color = vec3<f32>(v / f, (v - f) / f, (v - f - f) / f); 
     //out.color = vec3<f32>(1.0, 0.0, 0.0) * f32(i) / 2048;
     //if i == 0 {
     //    out.color = vec3<f32>(0.0, 1.0, 1.0);
@@ -83,6 +86,9 @@ var<uniform> simulation: Simulation;
 @group(0) @binding(2)
 var<storage, read_write> grid: array<u32>;
 
+@group(0) @binding(4)
+var<storage, read_write> grid_index: array<u32>;
+
 struct Sort {
     pass_index: u32,
     sorting_length: u32,
@@ -100,10 +106,14 @@ fn get_cell_index(position: vec2<f32>) -> u32 {
 }
 
 fn compare_and_swap(i1: u32, i2: u32) {
-    if get_cell_index(particles[i1].position) > get_cell_index(particles[i2].position) {
-        var tmp = particles[i1];
+    let grid1 = grid_index[i1];
+    let grid2 = grid_index[i2];
+    if grid1 > grid2 {
+        let tmp = particles[i1];
         particles[i1] = particles[i2];
         particles[i2] = tmp;
+        grid_index[i1] = grid2;
+        grid_index[i2] = grid1;
     }
 }
 
@@ -138,6 +148,13 @@ fn sort_particles_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
+@compute @workgroup_size(256)
+fn calculate_grid_indexes_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var i = global_id.x;
+    if i < sort.sorting_length {
+        grid_index[i] = get_cell_index(particles[i].position);
+    }
+}
 
 @compute
 @workgroup_size(16, 16)
@@ -149,7 +166,7 @@ fn clear_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute
-@workgroup_size(8, 32)
+@workgroup_size(16, 16)
 fn collide_grid_entry1(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell = vec2<u32>(global_id.x * 3, global_id.y * 2);
     if cell.x >= sort.grid_size.x || cell.y >= sort.grid_size.y {
@@ -158,7 +175,7 @@ fn collide_grid_entry1(@builtin(global_invocation_id) global_id: vec3<u32>) {
     collide_cell(cell);
 }
 @compute
-@workgroup_size(8, 32)
+@workgroup_size(16, 16)
 fn collide_grid_entry2(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell = vec2<u32>(global_id.x * 3, global_id.y * 2);
     if cell.x >= sort.grid_size.x || cell.y >= sort.grid_size.y {
@@ -167,7 +184,7 @@ fn collide_grid_entry2(@builtin(global_invocation_id) global_id: vec3<u32>) {
     collide_cell(cell + vec2<u32>(1, 0));
 }
 @compute
-@workgroup_size(8, 32)
+@workgroup_size(16, 16)
 fn collide_grid_entry3(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell = vec2<u32>(global_id.x * 3, global_id.y * 2);
     if cell.x >= sort.grid_size.x || cell.y >= sort.grid_size.y {
@@ -176,7 +193,7 @@ fn collide_grid_entry3(@builtin(global_invocation_id) global_id: vec3<u32>) {
     collide_cell(cell + vec2<u32>(2, 0));
 }
 @compute
-@workgroup_size(8, 32)
+@workgroup_size(16, 16)
 fn collide_grid_entry4(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell = vec2<u32>(global_id.x * 3, global_id.y * 2);
     if cell.x >= sort.grid_size.x || cell.y >= sort.grid_size.y {
@@ -185,7 +202,7 @@ fn collide_grid_entry4(@builtin(global_invocation_id) global_id: vec3<u32>) {
     collide_cell(cell + vec2<u32>(0, 1));
 }
 @compute
-@workgroup_size(8, 32)
+@workgroup_size(16, 16)
 fn collide_grid_entry5(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell = vec2<u32>(global_id.x * 3, global_id.y * 2);
     if cell.x >= sort.grid_size.x || cell.y >= sort.grid_size.y {
@@ -194,7 +211,7 @@ fn collide_grid_entry5(@builtin(global_invocation_id) global_id: vec3<u32>) {
     collide_cell(cell + vec2<u32>(1, 1));
 }
 @compute
-@workgroup_size(8, 32)
+@workgroup_size(16, 16)
 fn collide_grid_entry6(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell = vec2<u32>(global_id.x * 3, global_id.y * 2);
     if cell.x >= sort.grid_size.x || cell.y >= sort.grid_size.y {
@@ -206,13 +223,13 @@ fn collide_grid_entry6(@builtin(global_invocation_id) global_id: vec3<u32>) {
 const EmptyCell = 0xffffffffu;
 
 fn collide_cell(cell: vec2<u32>) {
-    let n_particles = simulation.spawned_particles;
     let grid_size = sort.grid_size;
     let main_cell_index = cell.x + cell.y * grid_size.x;
     var main_start = grid[main_cell_index];
     if main_start == EmptyCell {
         return;
     }
+    let n_particles = simulation.spawned_particles;
     let end_offset = u32(cell.x + 1 < grid_size.x);
     let right_cell_index = main_cell_index + end_offset;
     var main_end = main_start;
@@ -223,7 +240,7 @@ fn collide_cell(cell: vec2<u32>) {
         if next >= n_particles {
             break;
         }
-        let next_cell_index = get_cell_index(particles[next].position);
+        let next_cell_index = grid_index[next];
         if next_cell_index > right_cell_index {
             break;
         }
@@ -255,7 +272,7 @@ fn collide_cell(cell: vec2<u32>) {
         bottom_start = grid[bottom_start_cell_index];
     }
     var bottom_end = bottom_start;
-    while bottom_end + 1 < n_particles && get_cell_index(particles[bottom_end + 1].position) <= bottom_end_cell_index {
+    while bottom_end + 1 < n_particles && grid_index[bottom_end + 1] <= bottom_end_cell_index {
         bottom_end += 1u;
     }
     for (var i = main_start; i <= main_end; i += 1u) {
@@ -294,21 +311,21 @@ fn _collide_cell(cell: vec2<u32>) {
     var bottom_end_cell_index = bottom_row + bottom_end_x;
 
     loop {
-        for (var j = i + 1; j < n_particles && get_cell_index(particles[j].position) <= right_cell_index; j += 1u) {
+        for (var j = i + 1; j < n_particles && grid_index[j] <= right_cell_index; j += 1u) {
             collide(i, j);
         }
 
         if cell.y + 1 < grid_size.y {
             for (var j_cell_index = bottom_start_cell_index; j_cell_index <= bottom_end_cell_index; j_cell_index += 1u) {
                 var j = grid[j_cell_index];
-                for (; j < n_particles && get_cell_index(particles[j].position) == j_cell_index; j += 1u) {
+                for (; j < n_particles && grid_index[j] == j_cell_index; j += 1u) {
                     collide(i, j);
                 }
             }
         }
 
         i = i + 1;
-        if i >= n_particles || get_cell_index(particles[i].position) != main_cell_index {
+        if i >= n_particles || grid_index[i] != main_cell_index {
             return;
         }
     }
@@ -345,10 +362,10 @@ fn colorize_grid_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
             return;
         }
         let s = 8u;
-        let color = vec3<f32>(vec2<f32>(cell) / vec2<f32>(sort.grid_size), 1.0) * f32((cell.x / (3u * 8u)) % 2 == (cell.y / (64u)) % 2);
+        let color = vec3<f32>(vec2<f32>(cell) / vec2<f32>(sort.grid_size), 1.0) * f32((cell.x / (3u * 16u)) % 2 == (cell.y / (32u)) % 2);
         loop {
             particles[i].color = color;
-            if get_cell_index(particles[i + 1].position) == cell_index {
+            if i + 1 < simulation.spawned_particles && grid_index[i + 1] == cell_index {
                 i = i + 1u;
             } else {
                 break;
@@ -408,12 +425,14 @@ fn apply_box_constraint(i: u32) {
 @compute @workgroup_size(256)
 fn naive_collisions_entry(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var i = global_id.x;
-    if i < simulation.spawned_particles {
-        naive_collisions(i);
+    if i >= simulation.spawned_particles {
+        return;
     }
+    naive_collisions(i);
 }
 
 fn naive_collisions(i: u32) {
+    let cell_index = grid_index[i];
     for (var j = 0u; j < simulation.spawned_particles; j = j + 1u) {
         if i == j {
               continue;

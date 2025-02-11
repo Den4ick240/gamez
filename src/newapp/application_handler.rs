@@ -24,7 +24,9 @@ impl ApplicationHandlerImpl {
 
 impl ApplicationHandler<Event> for ApplicationHandlerImpl {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.state = pollster::block_on(Application::new(event_loop, &self.proxy)).into();
+        if self.state.is_none() {
+            self.state = pollster::block_on(Application::new(event_loop, &self.proxy)).into();
+        }
     }
 
     fn window_event(
