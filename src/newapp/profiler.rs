@@ -80,6 +80,12 @@ pub struct Profiler {
     starts: [Instant; Kind::COUNT],
 }
 
+pub struct TimerResult {
+    name: Box<str>,
+    time: f32,
+    nested_results: Vec<TimerResult>,
+}
+
 impl Profiler {
     pub fn new() -> Self {
         Self {
