@@ -48,7 +48,7 @@ impl Application {
                 .unwrap(),
         );
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let surface = instance
             .create_surface(window.clone())
             .expect("Failed to create surface!");
